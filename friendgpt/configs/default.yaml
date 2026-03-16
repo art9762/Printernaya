@@ -1,0 +1,40 @@
+# === Конфигурация FriendGPT ===
+
+# Базовая модель для fine-tuning (4-bit квантизация, оптимально для 24GB RAM)
+base_model: "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
+
+# Параметры обучения (оптимизированы для M4 Pro 24GB)
+training:
+  batch_size: 1
+  lora_layers: 8
+  learning_rate: 1.0e-5
+  epochs: 3
+  val_split: 0.1
+
+# Параметры генерации
+generation:
+  temperature: 0.8
+  top_p: 0.95
+  max_tokens: 512
+  repetition_penalty: 1.1
+
+# Параметры парсинга чатов
+parsing:
+  merge_window_minutes: 2        # Объединять сообщения в пределах N минут
+  max_gap_hours: 24              # Разрыв > N часов = новый диалог
+  min_reply_words: 3             # Минимум слов в ответе
+  strip_links: true              # Удалять ссылки из текста
+  context_window: 10             # Сколько предыдущих сообщений в контексте
+
+# Групповой чат
+group_chat:
+  relevance_threshold: 0.3       # Порог релевантности для ответа
+  max_responders: 3              # Максимум отвечающих за раз
+  delay_min: 0.5                 # Минимальная задержка (сек)
+  delay_max: 3.0                 # Максимальная задержка (сек)
+
+# Пути
+paths:
+  data_dir: "data"
+  models_dir: "models"
+  configs_dir: "configs"

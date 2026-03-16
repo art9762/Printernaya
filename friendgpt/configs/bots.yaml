@@ -1,0 +1,16 @@
+# === Конфигурация Telegram-ботов ===
+# Получи токены у @BotFather в Telegram
+
+bots:
+  # Пример: раскомментируй и замени на свои данные
+  # vasya:
+  #   token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+  # petya:
+  #   token: "987654321:ZYXwvuTSRqpoNMLkjiHGFedcba"
+
+# Групповой бот (все друзья в одном чате)
+# group_bot:
+#   token: "111222333:GroupBotTokenHere"
+#   friends:
+#     - vasya
+#     - petya
