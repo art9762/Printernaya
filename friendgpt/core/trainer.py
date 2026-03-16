@@ -193,12 +193,12 @@ class Trainer:
         # Формируем команду для mlx_lm.lora
         cmd = [
             sys.executable,
-            '-m', 'mlx_lm.lora',
+            '-m', 'mlx_lm', 'lora',
             '--model', self.model_name,
             '--data', str(self.data_dir),
             '--train',
             '--batch-size', str(self.config.batch_size),
-            '--lora-layers', str(self.config.lora_layers),
+            '--num-layers', str(self.config.lora_layers),
             '--iters', str(iters),
             '--learning-rate', str(self.config.learning_rate),
             '--adapter-path', str(self.adapter_path),
@@ -275,7 +275,7 @@ class Trainer:
 
         cmd = [
             sys.executable,
-            '-m', 'mlx_lm.lora',
+            '-m', 'mlx_lm', 'lora',
             '--model', self.model_name,
             '--data', str(val_data_dir),
             '--adapter-path', str(self.adapter_path),
