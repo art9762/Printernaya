@@ -135,6 +135,54 @@ class DatasetBuilder:
 
         return train_examples, valid_examples
 
+    def build_group_dataset(
+        self,
+        turns: list[ConversationTurn],
+        friend_name: str,
+        group_members: list[str],
+        personality_profile: Optional[dict] = None,
+    ) -> tuple[list[TrainingExample], list[TrainingExample]]:
+        """
+        Построить датасет из группового чата для конкретного друга.
+
+        Создает примеры обучения, где ответы друга в контексте группового чата
+        используются как выходные данные модели. Контекст включает сообщения ото всех
+        участников группы, каждое подписано именем отправителя.
+
+        Args:
+            turns: Список ConversationTurn из распарсенного группового диалога
+            friend_name: Имя друга, для которого строится датасет
+            group_members: Список имен всех участников группового чата
+            personality_profile: Профиль личности друга для генерации системного промпта
+                                 (если None, будет извлечен из turns)
+
+        Returns:
+            Кортеж (train_examples, valid_examples)
+        """
+        # Извлечь профиль личности, если не предоставлен
+        if personality_profile is None:
+            parser = TelegramParser()
+            personality_profile = parser.extract_personality_profile(turns, friend_name)
+
+        # Сегментировать диалог на отдельные беседы по временным разрывам
+        conversations = self._segment_by_time_gaps(turns)
+
+        # Генерировать примеры для обучения
+        all_examples = []
+        for conversation in conversations:
+            examples = self._create_group_examples_from_conversation(
+                conversation, friend_name, group_members, personality_profile
+            )
+            all_examples.extend(examples)
+
+        # Разделить на train/val
+        train_examples, valid_examples = self._split_train_val(all_examples)
+
+        # Обновить статистику
+        self._update_stats(all_examples, train_examples, valid_examples)
+
+        return train_examples, valid_examples
+
     def _segment_by_time_gaps(self, turns: list[ConversationTurn]) -> list[list[ConversationTurn]]:
         """
         Сегментировать диалог на отдельные беседы на основе временных разрывов.
@@ -231,6 +279,71 @@ class DatasetBuilder:
 
         return examples
 
+    def _create_group_examples_from_conversation(
+        self,
+        conversation: list[ConversationTurn],
+        friend_name: str,
+        group_members: list[str],
+        personality_profile: dict,
+    ) -> list[TrainingExample]:
+        """
+        Создать примеры для обучения из одной групповой беседы.
+
+        Используется подход скользящего окна: берем контекст (последние N сообщений)
+        от ВСЕХ участников группы как user input, ответ друга как assistant output.
+        Каждое сообщение в контексте подписано именем отправителя в формате [Имя]: текст.
+
+        Args:
+            conversation: Список сообщений одной групповой беседы
+            friend_name: Имя друга для фильтрации его сообщений
+            group_members: Список имен всех участников группы
+            personality_profile: Профиль личности друга
+
+        Returns:
+            Список примеров для обучения
+        """
+        examples = []
+
+        # Получить список индексов сообщений друга
+        friend_message_indices = [
+            i for i, turn in enumerate(conversation)
+            if turn.name == friend_name
+        ]
+
+        # Для каждого сообщения друга создать пример
+        for friend_idx in friend_message_indices:
+            friend_turn = conversation[friend_idx]
+
+            # Проверить минимальную длину ответа
+            reply_words = len(friend_turn.text.split())
+            if reply_words < self.min_reply_words:
+                self.stats.excluded_short_replies += 1
+                continue
+
+            # Собрать контекст: сообщения перед ответом друга
+            context_start = max(0, friend_idx - self.context_size)
+            context_turns = conversation[context_start:friend_idx]
+
+            # Создать пример для группового чата
+            example = self._create_group_example(
+                context_turns,
+                friend_turn,
+                personality_profile,
+            )
+
+            if example:
+                examples.append(example)
+
+                # Создать варианты с аугментированными системными промптами
+                augmented = self._create_augmented_group_examples(
+                    context_turns,
+                    friend_turn,
+                    personality_profile,
+                )
+                examples.extend(augmented)
+
+        return examples
+
     def _create_example(
         self,
         context_turns: list[ConversationTurn],
@@ -264,6 +377,49 @@ class DatasetBuilder:
         for turn in context_turns:
             role = "assistant" if turn.name == friend_turn.name else "user"
             messages.append({"role": role, "content": turn.text})
+
+        # Добавить ответ друга
+        messages.append({"role": "assistant", "content": friend_turn.text})
+
+        return TrainingExample(messages=messages)
+
+    def _create_group_example(
+        self,
+        context_turns: list[ConversationTurn],
+        friend_turn: ConversationTurn,
+        personality_profile: dict,
+    ) -> Optional[TrainingExample]:
+        """
+        Создать один пример обучения из группового чата в формате ChatML.
+
+        В групповом чате все сообщения (включая друга) представляются как user input,
+        подписанные именами отправителей в формате [Имя]: текст.
+
+        Args:
+            context_turns: Контекст сообщений перед ответом друга
+            friend_turn: Сообщение друга (assistant output)
+            personality_profile: Профиль личности друга
+
+        Returns:
+            TrainingExample или None если контекст пуст
+        """
+        if not context_turns:
+            return None
+
+        messages = []
+
+        # Добавить системный промпт для группового чата
+        system_prompt = self._generate_group_system_prompt(
+            friend_turn.name,
+            personality_profile,
+        )
+        messages.append({"role": "system", "content": system_prompt})
+
+        # Добавить контекст диалога с именами участников
+        for turn in context_turns:
+            # Форматировать сообщение как [Имя]: текст
+            labeled_content = f"[{turn.name}]: {turn.text}"
+            messages.append({"role": "user", "content": labeled_content})
 
         # Добавить ответ друга
         messages.append({"role": "assistant", "content": friend_turn.text})
@@ -316,6 +472,52 @@ class DatasetBuilder:
 
         return augmented
 
+    def _create_augmented_group_examples(
+        self,
+        context_turns: list[ConversationTurn],
+        friend_turn: ConversationTurn,
+        personality_profile: dict,
+        num_augmentations: int = 2,
+    ) -> list[TrainingExample]:
+        """
+        Создать варианты примера группового чата с аугментированными системными промптами.
+
+        Для улучшения робастности модели используются слегка измененные
+        формулировки системного промпта в контексте группового чата.
+
+        Args:
+            context_turns: Контекст сообщений
+            friend_turn: Сообщение друга
+            personality_profile: Профиль личности
+            num_augmentations: Количество вариантов аугментации
+
+        Returns:
+            Список примеров с аугментированными системными промптами
+        """
+        augmented = []
+
+        for variant_idx in range(num_augmentations):
+            messages = []
+
+            # Генерировать вариант системного промпта для группового чата
+            system_prompt = self._generate_augmented_group_system_prompt(
+                friend_turn.name,
+                personality_profile,
+                variant_idx,
+            )
+            messages.append({"role": "system", "content": system_prompt})
+
+            # Добавить контекст диалога с именами участников
+            for turn in context_turns:
+                labeled_content = f"[{turn.name}]: {turn.text}"
+                messages.append({"role": "user", "content": labeled_content})
+
+            messages.append({"role": "assistant", "content": friend_turn.text})
+
+            augmented.append(TrainingExample(messages=messages))
+
+        return augmented
+
     def _generate_system_prompt(
         self,
         friend_name: str,
@@ -349,6 +551,43 @@ class DatasetBuilder:
 
         prompt_parts.append(
             f"Общайся {communication_style} тоном, как {friend_name} в Telegram диалогах."
+        )
+
+        return " ".join(prompt_parts)
+
+    def _generate_group_system_prompt(
+        self,
+        friend_name: str,
+        personality_profile: dict,
+    ) -> str:
+        """
+        Генерировать системный промпт для группового чата на основе профиля личности.
+
+        Args:
+            friend_name: Имя друга
+            personality_profile: Профиль с характеристиками личности
+
+        Returns:
+            Системный промпт для ChatML формата в групповом чате
+        """
+        traits = personality_profile.get("traits", [])
+        interests = personality_profile.get("interests", [])
+        communication_style = personality_profile.get("communication_style", "friendly")
+
+        prompt_parts = [
+            f"Ты воплощаешь роль {friend_name} в групповом чате.",
+        ]
+
+        if traits:
+            traits_str = ", ".join(traits[:5])
+            prompt_parts.append(f"Твои основные черты характера: {traits_str}.")
+
+        if interests:
+            interests_str = ", ".join(interests[:5])
+            prompt_parts.append(f"Тебе интересны: {interests_str}.")
+
+        prompt_parts.append(
+            f"Общайся {communication_style} тоном в групповом контексте, как {friend_name} в Telegram."
         )
 
         return " ".join(prompt_parts)
@@ -392,6 +631,47 @@ class DatasetBuilder:
                     f"{traits[0] if traits else 'уникальной'} личностью."
                 )
             prompt_parts.append("Отвечай естественно и аутентично.")
+            return " ".join(prompt_parts)
+
+    def _generate_augmented_group_system_prompt(
+        self,
+        friend_name: str,
+        personality_profile: dict,
+        variant_idx: int,
+    ) -> str:
+        """
+        Генерировать вариант системного промпта для аугментации в групповом чате.
+
+        Args:
+            friend_name: Имя друга
+            personality_profile: Профиль личности
+            variant_idx: Индекс варианта (определяет способ генерации)
+
+        Returns:
+            Аугментированный системный промпт для группового чата
+        """
+        traits = personality_profile.get("traits", [])
+        interests = personality_profile.get("interests", [])
+
+        if variant_idx == 0:
+            # Вариант 1: Более минимальный промпт для группы
+            prompt_parts = [f"Ты {friend_name} в групповом чате Telegram."]
+            if traits:
+                traits_str = ", ".join(traits[:3])
+                prompt_parts.append(f"Ты {traits_str}.")
+            return " ".join(prompt_parts)
+
+        else:  # variant_idx >= 1
+            # Вариант 2: Более подробный промпт с контекстом группы
+            prompt_parts = [
+                f"{friend_name} - это участник группового чата в Telegram."
+            ]
+            if traits and interests:
+                prompt_parts.append(
+                    f"Интересуется {', '.join(interests[:3])} и известен "
+                    f"{traits[0] if traits else 'уникальной'} личностью."
+                )
+            prompt_parts.append("Отвечай естественно в контексте группового обсуждения.")
             return " ".join(prompt_parts)
 
     def _split_train_val(
@@ -502,3 +782,71 @@ class DatasetBuilder:
     def get_stats(self) -> DatasetStats:
         """Получить статистику построенного датасета."""
         return self.stats
+
+    @staticmethod
+    def merge_datasets(
+        dataset_dirs: list[Path],
+        output_dir: Path,
+        shuffle: bool = True,
+    ) -> tuple[int, int]:
+        """
+        Объединить несколько датасетов (из разных источников) в один.
+
+        Считывает train.jsonl и valid.jsonl из каждой директории и
+        объединяет их в единый датасет. Полезно когда один друг имеет
+        данные из личного чата и одного или нескольких групповых чатов.
+
+        Args:
+            dataset_dirs: Список директорий с датасетами (каждая содержит train.jsonl и valid.jsonl)
+            output_dir: Директория для сохранения объединенного датасета
+            shuffle: Перемешать ли примеры (рекомендуется для разнообразия)
+
+        Returns:
+            Кортеж (количество train примеров, количество valid примеров)
+        """
+        import random
+
+        all_train = []
+        all_valid = []
+
+        for d in dataset_dirs:
+            d = Path(d)
+            train_path = d / "train.jsonl"
+            valid_path = d / "valid.jsonl"
+
+            if train_path.exists():
+                with open(train_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            all_train.append(line)
+
+            if valid_path.exists():
+                with open(valid_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            all_valid.append(line)
+
+        # Перемешиваем для лучшего обучения (разные контексты чередуются)
+        if shuffle:
+            random.shuffle(all_train)
+            random.shuffle(all_valid)
+
+        # Сохраняем объединенный датасет
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(output_dir / "train.jsonl", "w", encoding="utf-8") as f:
+            for line in all_train:
+                f.write(line + "\n")
+
+        with open(output_dir / "valid.jsonl", "w", encoding="utf-8") as f:
+            for line in all_valid:
+                f.write(line + "\n")
+
+        print(f"✓ Объединенный датасет сохранен в {output_dir}")
+        print(f"  - train.jsonl ({len(all_train)} примеров из {len(dataset_dirs)} источников)")
+        print(f"  - valid.jsonl ({len(all_valid)} примеров)")
+
+        return len(all_train), len(all_valid)

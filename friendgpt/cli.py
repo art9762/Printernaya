@@ -105,13 +105,64 @@ class FriendManager:
         return friend_name in self.metadata
 
     def add_friend(self, friend_name: str, status: str = "imported") -> None:
-        """Добавляет нового друга."""
-        self.metadata[friend_name] = {
-            "status": status,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
-        }
+        """Добавляет нового друга (или обновляет существующего)."""
+        if friend_name not in self.metadata:
+            self.metadata[friend_name] = {
+                "status": status,
+                "sources": [],  # Список источников данных
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat()
+            }
+        else:
+            # Друг уже есть — сбрасываем статус на imported (датасет обновился)
+            self.metadata[friend_name]["status"] = status
+            self.metadata[friend_name]["updated_at"] = datetime.now().isoformat()
         self._save_metadata()
+
+    def add_source(self, friend_name: str, source_type: str, source_path: str,
+                   dataset_dir: str, num_examples: int = 0) -> None:
+        """
+        Добавляет источник данных для друга.
+
+        Args:
+            friend_name: Имя друга
+            source_type: Тип источника ("personal" или "group")
+            source_path: Путь к исходному экспорту
+            dataset_dir: Имя поддиректории с датасетом (напр. "dataset_personal_0")
+            num_examples: Количество примеров в источнике
+        """
+        if friend_name not in self.metadata:
+            self.add_friend(friend_name)
+
+        # Инициализируем sources если нет (обратная совместимость)
+        if "sources" not in self.metadata[friend_name]:
+            self.metadata[friend_name]["sources"] = []
+
+        self.metadata[friend_name]["sources"].append({
+            "type": source_type,
+            "source_path": source_path,
+            "dataset_dir": dataset_dir,
+            "num_examples": num_examples,
+            "added_at": datetime.now().isoformat()
+        })
+        self.metadata[friend_name]["updated_at"] = datetime.now().isoformat()
+        self._save_metadata()
+
+    def get_sources(self, friend_name: str) -> list:
+        """Возвращает список источников данных друга."""
+        if friend_name in self.metadata:
+            return self.metadata[friend_name].get("sources", [])
+        return []
+
+    def get_dataset_dirs(self, friend_name: str) -> List[Path]:
+        """Возвращает пути ко всем директориям с датасетами друга."""
+        friend_dir = self.get_friend_dir(friend_name)
+        dirs = []
+        for source in self.get_sources(friend_name):
+            d = friend_dir / source["dataset_dir"]
+            if d.exists():
+                dirs.append(d)
+        return dirs
 
     def update_friend_status(self, friend_name: str, status: str) -> None:
         """Обновляет статус друга."""
@@ -126,9 +177,18 @@ class FriendManager:
             return self.metadata[friend_name]["status"]
         return None
 
-    def list_friends(self) -> Dict[str, str]:
-        """Возвращает словарь всех друзей и их статусов."""
-        return {name: info["status"] for name, info in self.metadata.items()}
+    def list_friends(self) -> Dict[str, Any]:
+        """Возвращает словарь всех друзей и их информации."""
+        result = {}
+        for name, info in self.metadata.items():
+            sources = info.get("sources", [])
+            source_types = [s["type"] for s in sources]
+            result[name] = {
+                "status": info["status"],
+                "sources": source_types,
+                "num_sources": len(sources),
+            }
+        return result
 
 
 class ChatInterface:
@@ -373,21 +433,23 @@ class FriendGPTCLI:
         self.manager = FriendManager()
 
     def cmd_import(self, args: argparse.Namespace) -> None:
-        """Команда: импортировать чат Telegram."""
-        print(f"{self.colors.system}Импорт чата из {args.path}...{self.colors.reset}")
+        """Команда: импортировать личный чат Telegram (автоопределение формата)."""
+        print(f"{self.colors.system}Импорт личного чата из {args.path}...{self.colors.reset}")
 
         if not Path(args.path).exists():
-            print(f"{self.colors.error}Ошибка: файл не найден{self.colors.reset}")
+            print(f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}")
             return
 
         try:
-            # Парсим файл Telegram
+            # Парсим файл Telegram с автоматическим определением формата
             parser = TelegramParser()
-            messages = parser.parse_file(args.path)
+            messages = parser.parse_auto(args.path)
             print(f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}")
 
-            # Получаем статистику
-            stats = parser.get_statistics()
+            # Определяем уникальный номер источника
+            existing_sources = self.manager.get_sources(args.name)
+            source_idx = len(existing_sources)
+            dataset_subdir = f"dataset_personal_{source_idx}"
 
             # Строим датасет
             builder = DatasetBuilder()
@@ -396,30 +458,137 @@ class FriendGPTCLI:
                 friend_name=args.name
             )
 
-            # Сохраняем датасет
+            # Сохраняем датасет в поддиректорию
             friend_dir = self.manager.get_friend_dir(args.name)
             friend_dir.mkdir(exist_ok=True)
-            builder.save_dataset(train_examples, valid_examples, friend_dir / "dataset")
+            builder.save_dataset(train_examples, valid_examples, friend_dir / dataset_subdir)
 
-            # Обновляем метаданные
+            # Регистрируем источник
+            dataset_stats = builder.get_stats()
             self.manager.add_friend(args.name, status="imported")
+            self.manager.add_source(
+                friend_name=args.name,
+                source_type="personal",
+                source_path=str(args.path),
+                dataset_dir=dataset_subdir,
+                num_examples=dataset_stats.total_examples
+            )
 
             # Выводим статистику
-            dataset_stats = builder.get_stats()
-            print(f"\n{self.colors.success}Статистика датасета:{self.colors.reset}")
-            print(f"  Всего примеров: {dataset_stats.total_examples}")
+            print(f"\n{self.colors.success}Статистика датасета (личный чат):{self.colors.reset}")
             print(f"  Примеры для обучения: {dataset_stats.train_examples}")
             print(f"  Примеры для валидации: {dataset_stats.valid_examples}")
             print(f"  Средняя длина ответа: {dataset_stats.avg_reply_length:.1f} слов")
-            print(f"  Средняя длина контекста: {dataset_stats.avg_context_length:.1f} слов")
 
-            print(f"\n{self.colors.success}✓ Друг успешно импортирован!{self.colors.reset}")
+            total_sources = len(self.manager.get_sources(args.name))
+            if total_sources > 1:
+                print(f"\n{self.colors.system}У {args.name} теперь {total_sources} источников данных.{self.colors.reset}")
+                print(f"  При обучении (train) все источники будут объединены автоматически.")
+
+            print(f"\n{self.colors.success}✓ Личный чат импортирован!{self.colors.reset}")
+
+        except Exception as e:
+            print(f"{self.colors.error}Ошибка: {e}{self.colors.reset}")
+
+    def cmd_import_group(self, args: argparse.Namespace) -> None:
+        """
+        Команда: импортировать групповой чат Telegram.
+
+        Автоматически определяет всех участников. Если --friends не указан,
+        создает датасеты для всех участников (кроме --exclude).
+        Датасеты добавляются к существующим источникам каждого друга.
+        """
+        print(f"{self.colors.system}Импорт группового чата из {args.path}...{self.colors.reset}")
+
+        if not Path(args.path).exists():
+            print(f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}")
+            return
+
+        try:
+            # Парсим файл группового чата с автоматическим определением формата
+            parser = TelegramParser()
+            messages = parser.parse_auto(args.path)
+            print(f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}")
+
+            # Автодетект всех участников
+            all_members = sorted(set(turn.name for turn in messages))
+            stats = parser.get_statistics()
+            msg_by_member = stats.get('messages_by_participant', {})
+
+            print(f"\n{self.colors.system}Участники группового чата ({len(all_members)}):{self.colors.reset}")
+            for member in all_members:
+                count = msg_by_member.get(member, 0)
+                print(f"  - {member} ({count} сообщений)")
+
+            # Определяем список друзей для обучения
+            if hasattr(args, 'friends') and args.friends:
+                friends = args.friends
+                # Проверяем, что все указанные друзья есть в сообщениях
+                missing = set(friends) - set(all_members)
+                if missing:
+                    print(f"{self.colors.error}Не найдены в чате: {', '.join(missing)}{self.colors.reset}")
+                    return
+            else:
+                # Берём всех участников, исключая указанных в --exclude
+                exclude = set(args.exclude) if hasattr(args, 'exclude') and args.exclude else set()
+                friends = [m for m in all_members if m not in exclude]
+
+            print(f"\n{self.colors.system}Создание датасетов для: {', '.join(friends)}{self.colors.reset}")
+
+            # Для каждого друга строим свой датасет (добавляется к имеющимся)
+            for friend_name in friends:
+                print(f"\n  Обработка {friend_name}...")
+
+                # Определяем уникальный номер источника
+                existing_sources = self.manager.get_sources(friend_name)
+                source_idx = len(existing_sources)
+                dataset_subdir = f"dataset_group_{source_idx}"
+
+                # Строим групповой датасет
+                builder = DatasetBuilder()
+                train_examples, valid_examples = builder.build_group_dataset(
+                    turns=messages,
+                    friend_name=friend_name,
+                    group_members=all_members
+                )
+
+                # Сохраняем датасет
+                friend_dir = self.manager.get_friend_dir(friend_name)
+                friend_dir.mkdir(exist_ok=True)
+                builder.save_dataset(train_examples, valid_examples, friend_dir / dataset_subdir)
+
+                # Регистрируем источник
+                dataset_stats = builder.get_stats()
+                self.manager.add_friend(friend_name, status="imported")
+                self.manager.add_source(
+                    friend_name=friend_name,
+                    source_type="group",
+                    source_path=str(args.path),
+                    dataset_dir=dataset_subdir,
+                    num_examples=dataset_stats.total_examples
+                )
+
+                print(f"  {self.colors.success}✓ {friend_name}: "
+                      f"{dataset_stats.train_examples} train / "
+                      f"{dataset_stats.valid_examples} valid "
+                      f"(ответ ~{dataset_stats.avg_reply_length:.0f} слов){self.colors.reset}")
+
+                total_sources = len(self.manager.get_sources(friend_name))
+                if total_sources > 1:
+                    print(f"    Всего источников: {total_sources} (при train будут объединены)")
+
+            print(f"\n{self.colors.success}✓ Групповой чат импортирован!{self.colors.reset}")
 
         except Exception as e:
             print(f"{self.colors.error}Ошибка: {e}{self.colors.reset}")
 
     def cmd_train(self, args: argparse.Namespace) -> None:
-        """Команда: обучить модель на данных друга."""
+        """
+        Команда: обучить модель на данных друга.
+
+        Автоматически объединяет все источники (личные + групповые чаты)
+        в один датасет перед обучением.
+        """
         friend_name = args.friend_name
 
         if not self.manager.friend_exists(friend_name):
@@ -434,13 +603,33 @@ class FriendGPTCLI:
         print(f"  Эпохи: {epochs}")
 
         try:
-            # Загружаем данные друга
             friend_dir = self.manager.get_friend_dir(friend_name)
-            dataset_dir = friend_dir / "dataset"
 
-            if not dataset_dir.exists():
-                print(f"{self.colors.error}Ошибка: датасет не найден для {friend_name}{self.colors.reset}")
+            # Собираем все директории с датасетами
+            dataset_dirs = self.manager.get_dataset_dirs(friend_name)
+
+            if not dataset_dirs:
+                print(f"{self.colors.error}Ошибка: датасеты не найдены для {friend_name}{self.colors.reset}")
                 return
+
+            # Выводим информацию об источниках
+            sources = self.manager.get_sources(friend_name)
+            print(f"\n{self.colors.system}Источники данных ({len(sources)}):{self.colors.reset}")
+            for src in sources:
+                src_type = "личный" if src["type"] == "personal" else "групповой"
+                print(f"  - {src_type} чат ({src['num_examples']} примеров)")
+
+            # Объединяем датасеты если их несколько
+            if len(dataset_dirs) > 1:
+                print(f"\n{self.colors.system}Объединение {len(dataset_dirs)} датасетов...{self.colors.reset}")
+                merged_dir = friend_dir / "dataset_merged"
+                train_count, valid_count = DatasetBuilder.merge_datasets(
+                    dataset_dirs, merged_dir, shuffle=True
+                )
+                dataset_dir = merged_dir
+                print(f"  Итого: {train_count} train + {valid_count} valid примеров")
+            else:
+                dataset_dir = dataset_dirs[0]
 
             # Создаём модель друга
             friend_model = FriendModel(
@@ -451,7 +640,7 @@ class FriendGPTCLI:
             )
 
             # Обучаем адаптер
-            print(f"Обучение LoRA адаптера ({epochs} эпох)...")
+            print(f"\nОбучение LoRA адаптера ({epochs} эпох)...")
             success = friend_model.train(
                 data_dir=dataset_dir,
                 epochs=epochs,
@@ -608,9 +797,12 @@ class FriendGPTCLI:
             return
 
         print(f"\n{self.colors.system}Список друзей:{self.colors.reset}")
-        print("-" * 50)
+        print("-" * 60)
 
-        for name, status in friends.items():
+        for name, info in friends.items():
+            status = info["status"]
+            sources = info["sources"]
+
             # Определяем символ статуса
             if status == "imported":
                 symbol = "📦"
@@ -625,9 +817,19 @@ class FriendGPTCLI:
                 symbol = "❓"
                 color = self.colors.error
 
-            print(f"  {symbol} {color}{name:<30}{self.colors.reset} [{status}]")
+            # Формируем описание источников
+            personal_count = sources.count("personal")
+            group_count = sources.count("group")
+            source_parts = []
+            if personal_count:
+                source_parts.append(f"{personal_count} личн.")
+            if group_count:
+                source_parts.append(f"{group_count} груп.")
+            source_str = ", ".join(source_parts) if source_parts else "нет данных"
 
-        print("-" * 50)
+            print(f"  {symbol} {color}{name:<20}{self.colors.reset} [{status}] ({source_str})")
+
+        print("-" * 60)
         print(f"Всего друзей: {len(friends)}")
         print()
 
@@ -673,8 +875,22 @@ class FriendGPTCLI:
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Примеры использования:
+  # Импорт личного чата (JSON или HTML — автоопределение)
   python cli.py import result.json --name Иван
-  python cli.py train Иван --model gpt2 --iters 1000
+  python cli.py import chat_export/ --name Иван
+
+  # Импорт группового чата (автодетект участников)
+  python cli.py import-group group_export/              # все участники
+  python cli.py import-group group.html --friends Вася Петя
+  python cli.py import-group group.html --exclude БотСпам
+
+  # Один друг из личного + группового чата (данные объединяются)
+  python cli.py import dm_with_vasya/ --name Вася
+  python cli.py import-group group_chat/ --friends Вася
+  python cli.py train Вася   # обучится на обоих источниках
+
+  # Обучение, слияние, чат
+  python cli.py train Иван --epochs 5
   python cli.py fuse Иван
   python cli.py chat Иван
   python cli.py group Иван Мария
@@ -687,9 +903,16 @@ class FriendGPTCLI:
 
         # Команда import
         import_parser = subparsers.add_parser("import", help="Импортировать чат Telegram")
-        import_parser.add_argument("path", help="Путь к result.json из экспорта Telegram")
+        import_parser.add_argument("path", help="Путь к result.json или result.html из экспорта Telegram")
         import_parser.add_argument("--name", required=True, help="Имя друга")
         import_parser.set_defaults(func=self.cmd_import)
+
+        # Команда import-group
+        import_group_parser = subparsers.add_parser("import-group", help="Импортировать групповой чат Telegram")
+        import_group_parser.add_argument("path", help="Путь к экспорту группового чата (JSON/HTML/папка)")
+        import_group_parser.add_argument("--friends", nargs="+", help="Имена друзей для обучения (по умолчанию — все участники)")
+        import_group_parser.add_argument("--exclude", nargs="+", help="Участники, которых НЕ нужно обучать (напр. боты, вы сами)")
+        import_group_parser.set_defaults(func=self.cmd_import_group)
 
         # Команда train
         train_parser = subparsers.add_parser("train", help="Обучить модель друга")

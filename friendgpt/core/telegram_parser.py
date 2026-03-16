@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Optional
 from collections import defaultdict, Counter
 import statistics
+from html.parser import HTMLParser
+import glob
 
 
 @dataclass
@@ -99,6 +101,39 @@ class TelegramParser:
         # Сортируем по времени
         self.messages.sort(key=lambda m: m.date)
         return self.messages
+
+    def parse_auto(self, path: Path | str) -> list[Message]:
+        """
+        Автоматически определяет формат и парсит экспорт (JSON или HTML).
+
+        Args:
+            path: Путь к файлу или папке с экспортом
+
+        Returns:
+            Список структурированных сообщений
+        """
+        format_type = auto_detect_format(str(path))
+
+        if format_type == 'json':
+            return self.parse_file(path)
+        elif format_type == 'html':
+            html_parser = TelegramHTMLParser(strip_links=self.strip_links)
+            path_obj = Path(path)
+
+            # Если это директория, парсим все файлы в ней
+            if path_obj.is_dir():
+                messages = html_parser.feed_directory(path_obj)
+            else:
+                # Если это файл, парсим его
+                messages = html_parser.feed_file(path_obj)
+
+            # Копируем результаты в основной парсер
+            self.messages = messages
+            self.participants = html_parser.participants
+
+            return self.messages
+        else:
+            raise ValueError(f"Неизвестный формат: {format_type}")
 
     def _parse_message(self, msg_raw: dict[str, Any]) -> Optional[Message]:
         """
@@ -560,6 +595,307 @@ class TelegramParser:
             'service_messages': service_count,
             'date_range': date_range
         }
+
+
+class TelegramHTMLParser(HTMLParser):
+    """
+    Парсер HTML-экспортов Telegram Desktop.
+
+    Обрабатывает файлы messages.html, messages2.html и т.д., расположенные
+    в папке экспорта. Использует встроенный html.parser (без внешних зависимостей).
+    """
+
+    def __init__(self, strip_links: bool = True):
+        """
+        Инициализация HTML-парсера.
+
+        Args:
+            strip_links: Удалять ли ссылки из текста при очистке
+        """
+        super().__init__()
+        self.strip_links = strip_links
+        self.messages: list[Message] = []
+        self.participants: set[str] = set()
+
+        # Состояние парсинга
+        self._current_message: dict[str, Any] = {}
+        self._current_text_parts: list[str] = []
+        self._in_message = False
+        self._in_body = False
+        self._in_from_name = False
+        self._in_date = False
+        self._in_text = False
+        self._in_forwarded = False
+        self._in_media = False
+        self._last_from_name: Optional[str] = None
+        self._is_service = False
+
+    def feed_directory(self, directory_path: Path | str) -> list[Message]:
+        """
+        Парсит все HTML-файлы сообщений в папке экспорта.
+
+        Args:
+            directory_path: Путь к папке экспорта (содержит messages.html, messages2.html и т.д.)
+
+        Returns:
+            Список структурированных сообщений
+        """
+        directory_path = Path(directory_path)
+
+        if not directory_path.is_dir():
+            raise ValueError(f"Путь {directory_path} не является директорией")
+
+        # Собираем все файлы messages*.html и сортируем по номеру
+        message_files = sorted(
+            directory_path.glob('messages*.html'),
+            key=lambda p: (
+                int(re.search(r'\d+', p.stem).group(0))
+                if re.search(r'\d+', p.stem)
+                else 0
+            )
+        )
+
+        if not message_files:
+            raise ValueError(f"Не найдены файлы messages*.html в {directory_path}")
+
+        # Парсим каждый файл по очереди
+        for html_file in message_files:
+            with open(html_file, 'r', encoding='utf-8') as f:
+                self.feed(f.read())
+
+        # Сортируем по времени
+        self.messages.sort(key=lambda m: m.date)
+        return self.messages
+
+    def feed_file(self, file_path: Path | str) -> list[Message]:
+        """
+        Парсит один HTML-файл сообщений.
+
+        Args:
+            file_path: Путь к файлу messages.html
+
+        Returns:
+            Список структурированных сообщений
+        """
+        file_path = Path(file_path)
+
+        if not file_path.is_file():
+            raise ValueError(f"Файл {file_path} не существует")
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            self.feed(f.read())
+
+        # Сортируем по времени
+        self.messages.sort(key=lambda m: m.date)
+        return self.messages
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str]]) -> None:
+        """Обработчик открывающего тега."""
+        attrs_dict = dict(attrs)
+
+        # Проверяем наличие сообщения
+        if tag == 'div' and 'class' in attrs_dict:
+            classes = attrs_dict['class'].split()
+
+            # Начало нового сообщения
+            if 'message' in classes:
+                # Сохраняем предыдущее сообщение, если оно есть
+                if self._current_message:
+                    self._save_message()
+
+                # Инициализируем новое сообщение
+                self._current_message = {
+                    'id': attrs_dict.get('id', ''),
+                    'is_service': 'service' in classes,
+                    'is_joined': 'joined' in classes,
+                }
+                self._in_message = True
+                self._current_text_parts = []
+                self._is_service = 'service' in classes
+
+        # В теле сообщения
+        elif tag == 'div' and self._in_message:
+            if 'class' in attrs_dict:
+                classes = attrs_dict['class'].split()
+
+                if 'body' in classes:
+                    self._in_body = True
+                elif 'from_name' in classes:
+                    self._in_from_name = True
+                elif 'date' in classes and 'details' in classes:
+                    self._in_date = True
+                    # Парсим дату из атрибута title
+                    if 'title' in attrs_dict:
+                        self._parse_date(attrs_dict['title'])
+                elif 'text' in classes and not self._in_media:
+                    self._in_text = True
+                elif 'forwarded' in classes:
+                    self._in_forwarded = True
+                elif 'media_wrap' in classes:
+                    self._in_media = True
+                    self._current_message['is_media'] = True
+
+        # Ссылки в тексте
+        elif tag == 'a' and self._in_text:
+            if 'href' in attrs_dict:
+                self._current_text_parts.append(attrs_dict.get('title', attrs_dict['href']))
+
+    def handle_endtag(self, tag: str) -> None:
+        """Обработчик закрывающего тега."""
+        if tag == 'div':
+            if self._in_from_name:
+                self._in_from_name = False
+            elif self._in_date:
+                self._in_date = False
+            elif self._in_text:
+                self._in_text = False
+            elif self._in_body:
+                self._in_body = False
+            elif self._in_message:
+                self._in_message = False
+                # Сохраняем последнее сообщение в конце блока
+                if self._current_message:
+                    self._save_message()
+
+    def handle_data(self, data: str) -> None:
+        """Обработчик текстовых данных."""
+        # Очищаем от пробелов в начале/конце
+        data = data.strip()
+
+        if not data:
+            return
+
+        if self._in_from_name:
+            # Сохраняем имя отправителя
+            self._current_message['from_name'] = data
+            self._last_from_name = data
+        elif self._in_date:
+            # Дата уже парсена из атрибута title
+            pass
+        elif self._in_text:
+            # Добавляем текст
+            self._current_text_parts.append(data)
+
+    def _parse_date(self, date_str: str) -> None:
+        """
+        Парсит дату из атрибута title формата "DD.MM.YYYY HH:MM:SS UTC±HH:MM".
+
+        Args:
+            date_str: Строка с датой
+        """
+        try:
+            # Извлекаем дату и время, игнорируя UTC offset
+            # Формат: "01.03.2024 15:30:45 UTC+03:00"
+            match = re.match(
+                r'(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})',
+                date_str
+            )
+            if match:
+                day, month, year, hour, minute, second = map(int, match.groups())
+                self._current_message['date'] = datetime(year, month, day, hour, minute, second)
+        except (ValueError, AttributeError):
+            pass
+
+    def _save_message(self) -> None:
+        """Сохраняет текущее сообщение в список если оно валидно."""
+        if not self._current_message:
+            return
+
+        # Пропускаем сервисные сообщения
+        if self._current_message.get('is_service', False):
+            return
+
+        # Проверяем наличие обязательных полей
+        if 'date' not in self._current_message:
+            return
+
+        # Используем последнее известное имя (для "joined" сообщений)
+        from_name = self._current_message.get('from_name', self._last_from_name or '')
+
+        if not from_name:
+            return
+
+        # Собираем текст
+        text_content = ''.join(self._current_text_parts).strip()
+
+        if not text_content:
+            return
+
+        # Очищаем текст
+        cleaned_text = self._clean_text(text_content)
+
+        if not cleaned_text:
+            return
+
+        # Создаем сообщение
+        msg = Message(
+            from_name=from_name,
+            from_id='',  # HTML экспорт не содержит ID
+            date=self._current_message['date'],
+            text=cleaned_text,
+            is_forward=self._in_forwarded,
+            is_media=self._current_message.get('is_media', False),
+            is_service=False,
+            original_text=text_content
+        )
+
+        self.messages.append(msg)
+        self.participants.add(from_name)
+
+    def _clean_text(self, text: str) -> str:
+        """
+        Очищает текст сообщения.
+
+        Args:
+            text: Исходный текст
+
+        Returns:
+            Очищенный текст
+        """
+        # Удаляем ссылки если требуется
+        if self.strip_links:
+            text = re.sub(r'https?://\S+', '', text)
+            text = re.sub(r'www\.\S+', '', text)
+
+        # Удаляем множественные пробелы
+        text = re.sub(r'\s+', ' ', text)
+
+        # Удаляем ведущие/завершающие пробелы
+        text = text.strip()
+
+        return text
+
+
+def auto_detect_format(path: str) -> str:
+    """
+    Автоматически определяет формат экспорта (JSON или HTML).
+
+    Args:
+        path: Путь к файлу или папке
+
+    Returns:
+        'json' или 'html'
+
+    Raises:
+        ValueError: Если формат не может быть определен
+    """
+    path_obj = Path(path)
+
+    # Проверяем расширение файла
+    if str(path).endswith('.json'):
+        return 'json'
+    elif str(path).endswith('.html'):
+        return 'html'
+
+    # Проверяем если это директория с HTML экспортом
+    if path_obj.is_dir():
+        if (path_obj / 'messages.html').exists():
+            return 'html'
+
+    raise ValueError(
+        f"Не удалось определить формат экспорта для '{path}'. "
+        "Ожидается .json файл, .html файл или папка с messages.html"
+    )
 
 
 # Примеры использования и вспомогательные функции
