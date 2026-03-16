@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Optional
 from collections import defaultdict, Counter
 import statistics
-from html.parser import HTMLParser
 import glob
 
 
@@ -558,6 +557,29 @@ class TelegramParser:
 
         return russian_stopwords | english_stopwords
 
+    def messages_to_turns(self, user_name: Optional[str] = None) -> list[ConversationTurn]:
+        """
+        Конвертирует Message-объекты в ConversationTurn для DatasetBuilder.
+
+        Args:
+            user_name: Имя пользователя (будет role="user"). Если None — все роли "user".
+
+        Returns:
+            Список ConversationTurn
+        """
+        turns = []
+        for msg in self.messages:
+            if msg.is_service or msg.is_forward:
+                continue
+            role = "user"  # DatasetBuilder сам определит роли
+            turns.append(ConversationTurn(
+                role=role,
+                name=msg.from_name,
+                text=msg.text,
+                timestamp=msg.date,
+            ))
+        return turns
+
     def get_statistics(self) -> dict[str, Any]:
         """
         Возвращает общую статистику по сообщениям.
@@ -597,12 +619,12 @@ class TelegramParser:
         }
 
 
-class TelegramHTMLParser(HTMLParser):
+class TelegramHTMLParser:
     """
-    Парсер HTML-экспортов Telegram Desktop.
+    Парсер HTML-экспортов Telegram Desktop на основе BeautifulSoup.
 
     Обрабатывает файлы messages.html, messages2.html и т.д., расположенные
-    в папке экспорта. Использует встроенный html.parser (без внешних зависимостей).
+    в папке экспорта. Корректно работает со сложной вложенностью div'ов.
     """
 
     def __init__(self, strip_links: bool = True):
@@ -612,23 +634,10 @@ class TelegramHTMLParser(HTMLParser):
         Args:
             strip_links: Удалять ли ссылки из текста при очистке
         """
-        super().__init__()
         self.strip_links = strip_links
         self.messages: list[Message] = []
         self.participants: set[str] = set()
-
-        # Состояние парсинга
-        self._current_message: dict[str, Any] = {}
-        self._current_text_parts: list[str] = []
-        self._in_message = False
-        self._in_body = False
-        self._in_from_name = False
-        self._in_date = False
-        self._in_text = False
-        self._in_forwarded = False
-        self._in_media = False
         self._last_from_name: Optional[str] = None
-        self._is_service = False
 
     def feed_directory(self, directory_path: Path | str) -> list[Message]:
         """
@@ -640,6 +649,8 @@ class TelegramHTMLParser(HTMLParser):
         Returns:
             Список структурированных сообщений
         """
+        from bs4 import BeautifulSoup
+
         directory_path = Path(directory_path)
 
         if not directory_path.is_dir():
@@ -660,8 +671,7 @@ class TelegramHTMLParser(HTMLParser):
 
         # Парсим каждый файл по очереди
         for html_file in message_files:
-            with open(html_file, 'r', encoding='utf-8') as f:
-                self.feed(f.read())
+            self._parse_html_file(html_file)
 
         # Сортируем по времени
         self.messages.sort(key=lambda m: m.date)
@@ -682,165 +692,146 @@ class TelegramHTMLParser(HTMLParser):
         if not file_path.is_file():
             raise ValueError(f"Файл {file_path} не существует")
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            self.feed(f.read())
+        self._parse_html_file(file_path)
 
         # Сортируем по времени
         self.messages.sort(key=lambda m: m.date)
         return self.messages
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str]]) -> None:
-        """Обработчик открывающего тега."""
-        attrs_dict = dict(attrs)
+    def _parse_html_file(self, file_path: Path) -> None:
+        """
+        Парсит один HTML-файл и добавляет сообщения в self.messages.
 
-        # Проверяем наличие сообщения
-        if tag == 'div' and 'class' in attrs_dict:
-            classes = attrs_dict['class'].split()
+        Args:
+            file_path: Путь к HTML-файлу
+        """
+        from bs4 import BeautifulSoup
 
-            # Начало нового сообщения
-            if 'message' in classes:
-                # Сохраняем предыдущее сообщение, если оно есть
-                if self._current_message:
-                    self._save_message()
+        with open(file_path, 'r', encoding='utf-8') as f:
+            soup = BeautifulSoup(f.read(), 'html.parser')
 
-                # Инициализируем новое сообщение
-                self._current_message = {
-                    'id': attrs_dict.get('id', ''),
-                    'is_service': 'service' in classes,
-                    'is_joined': 'joined' in classes,
-                }
-                self._in_message = True
-                self._current_text_parts = []
-                self._is_service = 'service' in classes
+        # Находим все div'ы с классом "message" (включая default, service, joined)
+        message_divs = soup.find_all('div', class_='message')
 
-        # В теле сообщения
-        elif tag == 'div' and self._in_message:
-            if 'class' in attrs_dict:
-                classes = attrs_dict['class'].split()
+        for msg_div in message_divs:
+            classes = msg_div.get('class', [])
 
-                if 'body' in classes:
-                    self._in_body = True
-                elif 'from_name' in classes:
-                    self._in_from_name = True
-                elif 'date' in classes and 'details' in classes:
-                    self._in_date = True
-                    # Парсим дату из атрибута title
-                    if 'title' in attrs_dict:
-                        self._parse_date(attrs_dict['title'])
-                elif 'text' in classes and not self._in_media:
-                    self._in_text = True
-                elif 'forwarded' in classes:
-                    self._in_forwarded = True
-                elif 'media_wrap' in classes:
-                    self._in_media = True
-                    self._current_message['is_media'] = True
+            # Пропускаем сервисные сообщения
+            if 'service' in classes:
+                continue
 
-        # Ссылки в тексте
-        elif tag == 'a' and self._in_text:
-            if 'href' in attrs_dict:
-                self._current_text_parts.append(attrs_dict.get('title', attrs_dict['href']))
+            is_joined = 'joined' in classes
 
-    def handle_endtag(self, tag: str) -> None:
-        """Обработчик закрывающего тега."""
-        if tag == 'div':
-            if self._in_from_name:
-                self._in_from_name = False
-            elif self._in_date:
-                self._in_date = False
-            elif self._in_text:
-                self._in_text = False
-            elif self._in_body:
-                self._in_body = False
-            elif self._in_message:
-                self._in_message = False
-                # Сохраняем последнее сообщение в конце блока
-                if self._current_message:
-                    self._save_message()
+            # Проверяем на пересланные сообщения
+            forwarded_div = msg_div.find('div', class_='forwarded')
+            is_forward = forwarded_div is not None
 
-    def handle_data(self, data: str) -> None:
-        """Обработчик текстовых данных."""
-        # Очищаем от пробелов в начале/конце
-        data = data.strip()
+            # Извлекаем имя отправителя (НЕ из вложенного forwarded блока)
+            # Ищем body > from_name, но не body > forwarded > from_name
+            body_div = msg_div.find('div', class_='body', recursive=False) or msg_div.find('div', class_='body')
+            from_name = None
 
-        if not data:
-            return
+            if body_div:
+                # Ищем from_name как прямого потомка body, а не вложенного в forwarded
+                for child in body_div.children:
+                    if hasattr(child, 'get') and child.get('class') and 'from_name' in child.get('class', []):
+                        from_name = child.get_text(strip=True)
+                        self._last_from_name = from_name
+                        break
 
-        if self._in_from_name:
-            # Сохраняем имя отправителя
-            self._current_message['from_name'] = data
-            self._last_from_name = data
-        elif self._in_date:
-            # Дата уже парсена из атрибута title
-            pass
-        elif self._in_text:
-            # Добавляем текст
-            self._current_text_parts.append(data)
+            if not from_name:
+                if is_joined and self._last_from_name:
+                    from_name = self._last_from_name
+                else:
+                    continue
 
-    def _parse_date(self, date_str: str) -> None:
+            if not from_name:
+                continue
+
+            # Извлекаем дату — ищем в body (не в forwarded)
+            date_div = None
+            if body_div:
+                for child in body_div.children:
+                    if hasattr(child, 'get') and child.get('class'):
+                        child_classes = child.get('class', [])
+                        if 'date' in child_classes and 'details' in child_classes:
+                            date_div = child
+                            break
+            if not date_div:
+                # Фоллбэк: ищем где угодно, но не в forwarded
+                date_div = msg_div.find('div', class_=lambda c: c and 'date' in c.split() and 'details' in c.split())
+
+            if not date_div:
+                continue
+
+            date_title = date_div.get('title', '')
+            msg_date = self._parse_date(date_title)
+            if not msg_date:
+                continue
+
+            # Проверяем на медиа
+            is_media = msg_div.find('div', class_='media_wrap') is not None
+
+            # Извлекаем текст — из основного text div, НЕ из forwarded
+            text_div = None
+            if body_div and not is_forward:
+                for child in body_div.children:
+                    if hasattr(child, 'get') and child.get('class') and 'text' in child.get('class', []):
+                        text_div = child
+                        break
+            if not text_div:
+                text_div = msg_div.find('div', class_='text')
+            if not text_div:
+                continue
+
+            # Получаем весь текст (включая вложенные span, a и т.д.)
+            text_content = text_div.get_text(separator=' ', strip=True)
+
+            if not text_content:
+                continue
+
+            # Очищаем текст
+            cleaned_text = self._clean_text(text_content)
+
+            if not cleaned_text:
+                continue
+
+            # Создаем сообщение
+            msg = Message(
+                from_name=from_name,
+                from_id='',  # HTML экспорт не содержит ID
+                date=msg_date,
+                text=cleaned_text,
+                is_forward=is_forward,
+                is_media=is_media,
+                is_service=False,
+                original_text=text_content
+            )
+
+            self.messages.append(msg)
+            self.participants.add(from_name)
+
+    def _parse_date(self, date_str: str) -> Optional[datetime]:
         """
         Парсит дату из атрибута title формата "DD.MM.YYYY HH:MM:SS UTC±HH:MM".
 
         Args:
             date_str: Строка с датой
+
+        Returns:
+            datetime или None если парсинг не удался
         """
         try:
-            # Извлекаем дату и время, игнорируя UTC offset
-            # Формат: "01.03.2024 15:30:45 UTC+03:00"
             match = re.match(
                 r'(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})',
                 date_str
             )
             if match:
                 day, month, year, hour, minute, second = map(int, match.groups())
-                self._current_message['date'] = datetime(year, month, day, hour, minute, second)
+                return datetime(year, month, day, hour, minute, second)
         except (ValueError, AttributeError):
             pass
-
-    def _save_message(self) -> None:
-        """Сохраняет текущее сообщение в список если оно валидно."""
-        if not self._current_message:
-            return
-
-        # Пропускаем сервисные сообщения
-        if self._current_message.get('is_service', False):
-            return
-
-        # Проверяем наличие обязательных полей
-        if 'date' not in self._current_message:
-            return
-
-        # Используем последнее известное имя (для "joined" сообщений)
-        from_name = self._current_message.get('from_name', self._last_from_name or '')
-
-        if not from_name:
-            return
-
-        # Собираем текст
-        text_content = ''.join(self._current_text_parts).strip()
-
-        if not text_content:
-            return
-
-        # Очищаем текст
-        cleaned_text = self._clean_text(text_content)
-
-        if not cleaned_text:
-            return
-
-        # Создаем сообщение
-        msg = Message(
-            from_name=from_name,
-            from_id='',  # HTML экспорт не содержит ID
-            date=self._current_message['date'],
-            text=cleaned_text,
-            is_forward=self._in_forwarded,
-            is_media=self._current_message.get('is_media', False),
-            is_service=False,
-            original_text=text_content
-        )
-
-        self.messages.append(msg)
-        self.participants.add(from_name)
+        return None
 
     def _clean_text(self, text: str) -> str:
         """

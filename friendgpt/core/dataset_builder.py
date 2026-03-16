@@ -113,8 +113,7 @@ class DatasetBuilder:
         """
         # Извлечь профиль личности, если не предоставлен
         if personality_profile is None:
-            parser = TelegramParser()
-            personality_profile = parser.extract_personality_profile(turns, friend_name)
+            personality_profile = self._extract_profile_from_turns(turns, friend_name)
 
         # Сегментировать диалог на отдельные беседы по временным разрывам
         conversations = self._segment_by_time_gaps(turns)
@@ -161,8 +160,7 @@ class DatasetBuilder:
         """
         # Извлечь профиль личности, если не предоставлен
         if personality_profile is None:
-            parser = TelegramParser()
-            personality_profile = parser.extract_personality_profile(turns, friend_name)
+            personality_profile = self._extract_profile_from_turns(turns, friend_name)
 
         # Сегментировать диалог на отдельные беседы по временным разрывам
         conversations = self._segment_by_time_gaps(turns)
@@ -182,6 +180,52 @@ class DatasetBuilder:
         self._update_stats(all_examples, train_examples, valid_examples)
 
         return train_examples, valid_examples
+
+    @staticmethod
+    def _extract_profile_from_turns(turns: list[ConversationTurn], friend_name: str) -> dict:
+        """
+        Извлечь минимальный профиль личности из списка ConversationTurn.
+
+        Возвращает dict с ключами traits, interests, communication_style —
+        формат, который ожидают _generate_system_prompt и _generate_group_system_prompt.
+
+        Args:
+            turns: Список сообщений
+            friend_name: Имя друга
+
+        Returns:
+            Словарь профиля
+        """
+        from collections import Counter
+
+        friend_msgs = [t.text for t in turns if t.name == friend_name]
+        if not friend_msgs:
+            return {"traits": [], "interests": [], "communication_style": "дружелюбно"}
+
+        # Определяем стиль общения по средней длине сообщений
+        avg_len = sum(len(m) for m in friend_msgs) / len(friend_msgs)
+        if avg_len < 20:
+            style = "коротко и по делу"
+        elif avg_len < 60:
+            style = "дружелюбно"
+        else:
+            style = "развернуто и подробно"
+
+        # Собираем частые слова для определения интересов (очень упрощённо)
+        word_counter = Counter()
+        for msg in friend_msgs:
+            words = msg.lower().split()
+            for w in words:
+                if len(w) > 4:
+                    word_counter[w] += 1
+
+        top_words = [w for w, _ in word_counter.most_common(10)]
+
+        return {
+            "traits": [],
+            "interests": top_words[:5],
+            "communication_style": style,
+        }
 
     def _segment_by_time_gaps(self, turns: list[ConversationTurn]) -> list[list[ConversationTurn]]:
         """

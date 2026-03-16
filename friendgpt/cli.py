@@ -14,15 +14,32 @@ from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
 
-# Импорт модулей ядра
+# Импорт лёгких модулей ядра (парсер и датасет)
 try:
     from core.telegram_parser import TelegramParser
     from core.dataset_builder import DatasetBuilder
-    from core.trainer import Trainer, FriendModel
-    from core.inference import FriendEngine, GroupChat, ModelManager
 except ImportError:
     print("Ошибка: не удалось импортировать модули core/. Убедитесь, что проект установлен правильно.")
     sys.exit(1)
+
+# Тяжёлые модули (mlx_lm) загружаются лениво — только при train/fuse/chat
+FriendModel = None
+FriendEngine = None
+
+
+def _ensure_ml_imports():
+    """Ленивый импорт модулей, требующих mlx_lm."""
+    global FriendModel, FriendEngine
+    if FriendModel is None:
+        try:
+            from core.trainer import FriendModel as _FM
+            from core.inference import FriendEngine as _FE
+            FriendModel = _FM
+            FriendEngine = _FE
+        except ImportError as e:
+            print(f"Ошибка: для этой команды нужен mlx_lm. Установите: pip install mlx mlx-lm")
+            print(f"Детали: {e}")
+            sys.exit(1)
 
 try:
     from tqdm import tqdm
@@ -446,6 +463,22 @@ class FriendGPTCLI:
             messages = parser.parse_auto(args.path)
             print(f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}")
 
+            # Показываем участников
+            stats = parser.get_statistics()
+            msg_by = stats.get('messages_by_participant', {})
+            print(f"\n{self.colors.system}Участники чата:{self.colors.reset}")
+            for name, count in sorted(msg_by.items(), key=lambda x: -x[1]):
+                marker = " ← друг" if name == args.name else ""
+                print(f"  {name}: {count} сообщений{marker}")
+
+            if args.name not in msg_by:
+                print(f"\n{self.colors.error}Имя «{args.name}» не найдено в чате!{self.colors.reset}")
+                print(f"  Используйте одно из имён выше с флагом --name")
+                return
+
+            # Конвертируем Message → ConversationTurn
+            turns = parser.messages_to_turns()
+
             # Определяем уникальный номер источника
             existing_sources = self.manager.get_sources(args.name)
             source_idx = len(existing_sources)
@@ -454,7 +487,7 @@ class FriendGPTCLI:
             # Строим датасет
             builder = DatasetBuilder()
             train_examples, valid_examples = builder.build_dataset(
-                turns=messages,
+                turns=turns,
                 friend_name=args.name
             )
 
@@ -510,8 +543,11 @@ class FriendGPTCLI:
             messages = parser.parse_auto(args.path)
             print(f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}")
 
+            # Конвертируем Message → ConversationTurn
+            turns = parser.messages_to_turns()
+
             # Автодетект всех участников
-            all_members = sorted(set(turn.name for turn in messages))
+            all_members = sorted(set(turn.name for turn in turns))
             stats = parser.get_statistics()
             msg_by_member = stats.get('messages_by_participant', {})
 
@@ -547,7 +583,7 @@ class FriendGPTCLI:
                 # Строим групповой датасет
                 builder = DatasetBuilder()
                 train_examples, valid_examples = builder.build_group_dataset(
-                    turns=messages,
+                    turns=turns,
                     friend_name=friend_name,
                     group_members=all_members
                 )
@@ -589,6 +625,7 @@ class FriendGPTCLI:
         Автоматически объединяет все источники (личные + групповые чаты)
         в один датасет перед обучением.
         """
+        _ensure_ml_imports()
         friend_name = args.friend_name
 
         if not self.manager.friend_exists(friend_name):
@@ -664,6 +701,7 @@ class FriendGPTCLI:
 
     def cmd_fuse(self, args: argparse.Namespace) -> None:
         """Команда: слить адаптер с базовой моделью."""
+        _ensure_ml_imports()
         friend_name = args.friend_name
 
         status = self.manager.get_friend_status(friend_name)
@@ -701,6 +739,7 @@ class FriendGPTCLI:
 
     def cmd_chat(self, args: argparse.Namespace) -> None:
         """Команда: начать чат с другом."""
+        _ensure_ml_imports()
         friend_name = args.friend_name
 
         status = self.manager.get_friend_status(friend_name)
@@ -744,6 +783,7 @@ class FriendGPTCLI:
 
     def cmd_group(self, args: argparse.Namespace) -> None:
         """Команда: начать групповой чат."""
+        _ensure_ml_imports()
         friends = args.friends
 
         # Проверяем, что все друзья существуют и готовы
