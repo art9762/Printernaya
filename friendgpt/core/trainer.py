@@ -29,7 +29,7 @@ class TrainingConfig:
     def __init__(
         self,
         model_name: str = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
-        batch_size: int = 1,
+        batch_size: int = 2,
         lora_layers: int = 8,
         learning_rate: float = 1e-5,
         iters: Optional[int] = None,
@@ -86,7 +86,7 @@ class Trainer:
         data_dir: Path | str,
         adapter_path: Path | str,
         model_name: str = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
-        batch_size: int = 1,
+        batch_size: int = 2,
         lora_layers: int = 8,
         learning_rate: float = 1e-5,
     ):
@@ -163,9 +163,37 @@ class Trainer:
 
         return None
 
+    def _find_latest_checkpoint(self) -> Optional[Path]:
+        """
+        Ищет последний сохранённый чекпоинт в директории адаптера.
+
+        Returns:
+            Путь к файлу чекпоинта или None если чекпоинтов нет
+        """
+        adapter_dir = Path(self.adapter_path)
+        if not adapter_dir.exists():
+            return None
+
+        # mlx_lm сохраняет чекпоинты как adapters.safetensors (финальный)
+        # или в adapter_path напрямую
+        checkpoint = adapter_dir / "adapters.safetensors"
+        if checkpoint.exists():
+            return checkpoint
+
+        return None
+
+    def _parse_iter_from_output(self, output: str) -> Optional[int]:
+        """Парсит текущую итерацию из вывода mlx_lm."""
+        # Формат: "Iter 500: ..." или "Step 500: ..."
+        match = re.search(r'(?:Iter|Step)\s+(\d+)', output, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return None
+
     def train(self, epochs: int = 3) -> bool:
         """
         Запускает тренировку LoRA адаптера.
+        Автоматически продолжает с последнего чекпоинта если он есть.
 
         Args:
             epochs: Количество эпох для тренировки
@@ -191,6 +219,7 @@ class Trainer:
         self.config.iters = iters
 
         # Формируем команду для mlx_lm.lora
+        save_every = 500  # Сохраняем чекпоинт каждые 500 итераций
         cmd = [
             sys.executable,
             '-m', 'mlx_lm', 'lora',
@@ -202,12 +231,22 @@ class Trainer:
             '--iters', str(iters),
             '--learning-rate', str(self.config.learning_rate),
             '--adapter-path', str(self.adapter_path),
+            '--save-every', str(save_every),
+            '--steps-per-report', '100',
+            '--steps-per-eval', '500',
         ]
+
+        # Авто-resume: если есть чекпоинт, продолжаем с него
+        checkpoint = self._find_latest_checkpoint()
+        if checkpoint:
+            logger.info(f"Найден чекпоинт: {checkpoint}, продолжаем тренировку")
+            cmd.extend(['--resume-adapter-file', str(checkpoint)])
 
         logger.info(f"Команда: {' '.join(cmd)}")
 
         self.is_training = True
         self.training_loss.clear()
+        self.last_iter = 0
 
         try:
             # Запускаем тренировку с потоковым выводом
@@ -220,21 +259,55 @@ class Trainer:
             )
 
             # Обрабатываем вывод в реальном времени
-            for line in process.stdout:
-                line = line.strip()
-                if line:
-                    logger.info(f"[mlx_lm] {line}")
+            try:
+                for line in process.stdout:
+                    line = line.strip()
+                    if line:
+                        logger.info(f"[mlx_lm] {line}")
 
-                    # Пытаемся распарсить loss
-                    loss = self._parse_loss_from_output(line)
-                    if loss is not None:
-                        self.training_loss.append(loss)
+                        # Парсим номер итерации
+                        iter_num = self._parse_iter_from_output(line)
+                        if iter_num is not None:
+                            self.last_iter = iter_num
+
+                        # Пытаемся распарсить loss
+                        loss = self._parse_loss_from_output(line)
+                        if loss is not None:
+                            self.training_loss.append(loss)
+
+            except KeyboardInterrupt:
+                # Graceful shutdown: даём mlx_lm время сохранить текущее состояние
+                logger.info("Получен Ctrl+C, останавливаем тренировку...")
+                logger.info(f"Последняя итерация: {self.last_iter}/{iters}")
+                process.terminate()
+                try:
+                    process.wait(timeout=30)  # Ждём до 30 сек
+                except subprocess.TimeoutExpired:
+                    process.kill()
+
+                self.is_training = False
+
+                # Проверяем сохранился ли чекпоинт
+                checkpoint = self._find_latest_checkpoint()
+                if checkpoint:
+                    logger.info(f"✓ Чекпоинт сохранён: {checkpoint}")
+                    logger.info(f"  Прогресс: {self.last_iter}/{iters} итераций")
+                    logger.info("  Для продолжения запустите ту же команду train — она подхватит чекпоинт автоматически")
+                    return True  # Считаем частичный успех
+                else:
+                    logger.warning("Чекпоинт не найден после прерывания")
+                    return False
 
             returncode = process.wait()
 
             if returncode != 0:
                 logger.error(f"Тренировка завершилась с ошибкой (код {returncode})")
                 self.is_training = False
+                # Даже при ошибке чекпоинт мог сохраниться
+                checkpoint = self._find_latest_checkpoint()
+                if checkpoint:
+                    logger.info(f"Но чекпоинт доступен: {checkpoint}")
+                    logger.info("Для продолжения запустите ту же команду train")
                 return False
 
             logger.info("Тренировка завершена успешно")

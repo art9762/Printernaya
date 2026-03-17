@@ -676,12 +676,20 @@ class FriendGPTCLI:
                 configs_dir=friend_dir.parent / "configs"
             )
 
+            # Проверяем наличие чекпоинта для resume
+            adapter_path = friend_model.get_adapter_path()
+            checkpoint_file = adapter_path / "adapters.safetensors"
+            if checkpoint_file.exists():
+                print(f"\n{self.colors.system}⟳ Найден чекпоинт — продолжаем тренировку с последнего сохранения{self.colors.reset}")
+
             # Обучаем адаптер
-            print(f"\nОбучение LoRA адаптера ({epochs} эпох)...")
+            print(f"\nОбучение LoRA адаптера ({epochs} эпох, batch_size=2)...")
+            print(f"  Чекпоинт сохраняется каждые 500 итераций")
+            print(f"  Можно безопасно прервать через Ctrl+C\n")
             success = friend_model.train(
                 data_dir=dataset_dir,
                 epochs=epochs,
-                batch_size=1,
+                batch_size=2,
                 lora_layers=8,
                 learning_rate=1e-5
             )
