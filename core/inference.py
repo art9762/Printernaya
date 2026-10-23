@@ -4,19 +4,20 @@
 Содержит классы для управления инференсом отдельного друга, групповым чатом и загруженными моделями.
 """
 
-import time
 import random
-from dataclasses import dataclass, field
-from typing import Optional
-from pathlib import Path
+import time
 from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
 
-from mlx_lm import load, generate
+from mlx_lm import generate, load
 
 
 @dataclass
 class FriendResponse:
     """Ответ одного друга в групповом чате."""
+
     name: str
     text: str
     delay_seconds: float
@@ -128,7 +129,7 @@ class FriendEngine:
         # Очищаем промпт от ответа, чтобы получить только сгенерированную часть
         generated_text = response.strip()
         if generated_text.startswith(prompt):
-            generated_text = generated_text[len(prompt):].strip()
+            generated_text = generated_text[len(prompt) :].strip()
 
         return generated_text
 
@@ -143,19 +144,13 @@ class FriendEngine:
             Ответ от друга
         """
         # Добавляем сообщение пользователя в историю
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_message
-        })
+        self.conversation_history.append({"role": "user", "content": user_message})
 
         # Генерируем ответ
         response = self.generate_response(list(self.conversation_history))
 
         # Добавляем ответ ассистента в историю
-        self.conversation_history.append({
-            "role": "assistant",
-            "content": response
-        })
+        self.conversation_history.append({"role": "assistant", "content": response})
 
         return response
 
@@ -238,11 +233,13 @@ class GroupChat:
             Список ответов от друзей (FriendResponse)
         """
         # Добавляем сообщение в общую историю
-        self.shared_history.append({
-            "role": "user" if author == "User" else "assistant",
-            "content": f"{author}: {text}",
-            "author": author,
-        })
+        self.shared_history.append(
+            {
+                "role": "user" if author == "User" else "assistant",
+                "content": f"{author}: {text}",
+                "author": author,
+            }
+        )
 
         responses = []
 
@@ -262,7 +259,7 @@ class GroupChat:
                 clean_messages = [
                     {
                         "role": msg["role"],
-                        "content": msg["content"].replace(f"{msg['author']}: ", "", 1)
+                        "content": msg["content"].replace(f"{msg['author']}: ", "", 1),
                     }
                     for msg in recent_messages
                 ]
@@ -271,17 +268,21 @@ class GroupChat:
                 friend_response_text = friend_engine.generate_response(clean_messages)
 
                 # Добавляем ответ в общую историю
-                self.shared_history.append({
-                    "role": "assistant",
-                    "content": f"{friend_name}: {friend_response_text}",
-                    "author": friend_name,
-                })
+                self.shared_history.append(
+                    {
+                        "role": "assistant",
+                        "content": f"{friend_name}: {friend_response_text}",
+                        "author": friend_name,
+                    }
+                )
 
-                responses.append(FriendResponse(
-                    name=friend_name,
-                    text=friend_response_text,
-                    delay_seconds=delay,
-                ))
+                responses.append(
+                    FriendResponse(
+                        name=friend_name,
+                        text=friend_response_text,
+                        delay_seconds=delay,
+                    )
+                )
 
         return responses
 
@@ -339,6 +340,7 @@ class GroupChat:
 
         # Возвращаем топ-20 уникальных слов по частоте
         from collections import Counter
+
         word_counts = Counter(keywords)
         return [word for word, _ in word_counts.most_common(20)]
 
@@ -379,7 +381,7 @@ class ModelManager:
         model_path: str,
         adapter_path: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> FriendEngine:
         """
         Регистрирует нового друга с его моделью.
@@ -402,7 +404,7 @@ class ModelManager:
             model_path=model_path,
             adapter_path=adapter_path,
             system_prompt=system_prompt,
-            **kwargs
+            **kwargs,
         )
 
         self._friends[name] = friend

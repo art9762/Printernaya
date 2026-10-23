@@ -18,8 +18,7 @@ import yaml
 # Настройка логирования
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 
@@ -64,17 +63,19 @@ class TrainingConfig:
         if dataset_size == 0:
             return 100
         iters = max(100, (dataset_size // self.batch_size) * epochs)
-        logger.info(f"Вычислено итераций: {iters} для {dataset_size} примеров, {epochs} эпох")
+        logger.info(
+            f"Вычислено итераций: {iters} для {dataset_size} примеров, {epochs} эпох"
+        )
         return iters
 
     def to_dict(self) -> dict:
         """Преобразует конфигурацию в словарь."""
         return {
-            'model_name': self.model_name,
-            'batch_size': self.batch_size,
-            'lora_layers': self.lora_layers,
-            'learning_rate': self.learning_rate,
-            'iters': self.iters,
+            "model_name": self.model_name,
+            "batch_size": self.batch_size,
+            "lora_layers": self.lora_layers,
+            "learning_rate": self.learning_rate,
+            "iters": self.iters,
         }
 
 
@@ -130,7 +131,7 @@ class Trainer:
 
         for jsonl_file in jsonl_files:
             try:
-                with open(jsonl_file, 'r', encoding='utf-8') as f:
+                with open(jsonl_file, "r", encoding="utf-8") as f:
                     count += sum(1 for _ in f)
             except Exception as e:
                 logger.error(f"Ошибка при чтении {jsonl_file}: {e}")
@@ -149,8 +150,8 @@ class Trainer:
         """
         # Попытка найти loss в различных форматах
         patterns = [
-            r'loss[:\s]+([0-9.]+)',
-            r'Loss[:\s]+([0-9.]+)',
+            r"loss[:\s]+([0-9.]+)",
+            r"Loss[:\s]+([0-9.]+)",
         ]
 
         for pattern in patterns:
@@ -185,7 +186,7 @@ class Trainer:
     def _parse_iter_from_output(self, output: str) -> Optional[int]:
         """Парсит текущую итерацию из вывода mlx_lm."""
         # Формат: "Iter 500: ..." или "Step 500: ..."
-        match = re.search(r'(?:Iter|Step)\s+(\d+)', output, re.IGNORECASE)
+        match = re.search(r"(?:Iter|Step)\s+(\d+)", output, re.IGNORECASE)
         if match:
             return int(match.group(1))
         return None
@@ -222,25 +223,37 @@ class Trainer:
         save_every = 500  # Сохраняем чекпоинт каждые 500 итераций
         cmd = [
             sys.executable,
-            '-m', 'mlx_lm', 'lora',
-            '--model', self.model_name,
-            '--data', str(self.data_dir),
-            '--train',
-            '--batch-size', str(self.config.batch_size),
-            '--num-layers', str(self.config.lora_layers),
-            '--iters', str(iters),
-            '--learning-rate', str(self.config.learning_rate),
-            '--adapter-path', str(self.adapter_path),
-            '--save-every', str(save_every),
-            '--steps-per-report', '100',
-            '--steps-per-eval', '500',
+            "-m",
+            "mlx_lm",
+            "lora",
+            "--model",
+            self.model_name,
+            "--data",
+            str(self.data_dir),
+            "--train",
+            "--batch-size",
+            str(self.config.batch_size),
+            "--num-layers",
+            str(self.config.lora_layers),
+            "--iters",
+            str(iters),
+            "--learning-rate",
+            str(self.config.learning_rate),
+            "--adapter-path",
+            str(self.adapter_path),
+            "--save-every",
+            str(save_every),
+            "--steps-per-report",
+            "100",
+            "--steps-per-eval",
+            "500",
         ]
 
         # Авто-resume: если есть чекпоинт, продолжаем с него
         checkpoint = self._find_latest_checkpoint()
         if checkpoint:
             logger.info(f"Найден чекпоинт: {checkpoint}, продолжаем тренировку")
-            cmd.extend(['--resume-adapter-file', str(checkpoint)])
+            cmd.extend(["--resume-adapter-file", str(checkpoint)])
 
         logger.info(f"Команда: {' '.join(cmd)}")
 
@@ -292,7 +305,9 @@ class Trainer:
                 if checkpoint:
                     logger.info(f"✓ Чекпоинт сохранён: {checkpoint}")
                     logger.info(f"  Прогресс: {self.last_iter}/{iters} итераций")
-                    logger.info("  Для продолжения запустите ту же команду train — она подхватит чекпоинт автоматически")
+                    logger.info(
+                        "  Для продолжения запустите ту же команду train — она подхватит чекпоинт автоматически"
+                    )
                     return True  # Считаем частичный успех
                 else:
                     logger.warning("Чекпоинт не найден после прерывания")
@@ -313,7 +328,8 @@ class Trainer:
             logger.info("Тренировка завершена успешно")
             logger.info(
                 f"Средний loss: {sum(self.training_loss) / len(self.training_loss):.4f}"
-                if self.training_loss else "Loss значения не найдены"
+                if self.training_loss
+                else "Loss значения не найдены"
             )
 
             self.is_training = False
@@ -336,7 +352,7 @@ class Trainer:
             Значение loss или None в случае ошибки
         """
         if val_data_dir is None:
-            val_data_dir = self.data_dir / 'val'
+            val_data_dir = self.data_dir / "val"
 
         val_data_dir = Path(val_data_dir)
 
@@ -348,10 +364,15 @@ class Trainer:
 
         cmd = [
             sys.executable,
-            '-m', 'mlx_lm', 'lora',
-            '--model', self.model_name,
-            '--data', str(val_data_dir),
-            '--adapter-path', str(self.adapter_path),
+            "-m",
+            "mlx_lm",
+            "lora",
+            "--model",
+            self.model_name,
+            "--data",
+            str(val_data_dir),
+            "--adapter-path",
+            str(self.adapter_path),
         ]
 
         try:
@@ -368,7 +389,7 @@ class Trainer:
 
             # Парсим loss из вывода
             loss = None
-            for line in result.stdout.split('\n'):
+            for line in result.stdout.split("\n"):
                 parsed_loss = self._parse_loss_from_output(line)
                 if parsed_loss is not None:
                     loss = parsed_loss
@@ -407,10 +428,14 @@ class Trainer:
 
         cmd = [
             sys.executable,
-            '-m', 'mlx_lm.fuse',
-            '--model', self.model_name,
-            '--adapter-path', str(self.adapter_path),
-            '--save-path', str(output_path),
+            "-m",
+            "mlx_lm.fuse",
+            "--model",
+            self.model_name,
+            "--adapter-path",
+            str(self.adapter_path),
+            "--save-path",
+            str(output_path),
         ]
 
         logger.info(f"Команда: {' '.join(cmd)}")
@@ -491,16 +516,18 @@ class FriendModel:
     def _load_config(self) -> None:
         """Загружает конфигурацию из YAML файла."""
         if not self.config_path.exists():
-            logger.info(f"Конфигурация для {self.friend_name} не найдена, создаём новую")
+            logger.info(
+                f"Конфигурация для {self.friend_name} не найдена, создаём новую"
+            )
             self._save_config()
             return
 
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
+            with open(self.config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
 
-            self._personality_profile = config.get('personality_profile', {})
-            self._is_trained = config.get('is_trained', False)
+            self._personality_profile = config.get("personality_profile", {})
+            self._is_trained = config.get("is_trained", False)
             logger.info(f"Конфигурация загружена для {self.friend_name}")
 
         except Exception as e:
@@ -509,16 +536,16 @@ class FriendModel:
     def _save_config(self) -> None:
         """Сохраняет конфигурацию в YAML файл."""
         config = {
-            'friend_name': self.friend_name,
-            'base_model': self.base_model,
-            'is_trained': self._is_trained,
-            'personality_profile': self._personality_profile,
-            'adapter_path': str(self.get_adapter_path()),
-            'fused_model_path': str(self.get_fused_model_path()),
+            "friend_name": self.friend_name,
+            "base_model": self.base_model,
+            "is_trained": self._is_trained,
+            "personality_profile": self._personality_profile,
+            "adapter_path": str(self.get_adapter_path()),
+            "fused_model_path": str(self.get_fused_model_path()),
         }
 
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
             logger.info(f"Конфигурация сохранена для {self.friend_name}")
         except Exception as e:
@@ -562,7 +589,9 @@ class FriendModel:
             return fused_path
 
         if self._is_trained and self.get_adapter_path().exists():
-            logger.info(f"Объединённая модель не найдена, используем базовую с адаптером")
+            logger.info(
+                f"Объединённая модель не найдена, используем базовую с адаптером"
+            )
             return self.get_adapter_path()
 
         logger.info(f"Модель не обучена, используем базовую: {self.base_model}")
@@ -623,13 +652,16 @@ class FriendModel:
             True если объединение успешно, False иначе
         """
         if not self._is_trained:
-            logger.error(f"Модель для {self.friend_name} не обучена, объединение невозможно")
+            logger.error(
+                f"Модель для {self.friend_name} не обучена, объединение невозможно"
+            )
             return False
 
         logger.info(f"Объединяем адаптер для {self.friend_name}")
 
         trainer = Trainer(
-            data_dir=Path.home() / "temp",  # Временная директория (не используется для fuse)
+            data_dir=Path.home()
+            / "temp",  # Временная директория (не используется для fuse)
             adapter_path=self.get_adapter_path(),
             model_name=self.base_model,
         )

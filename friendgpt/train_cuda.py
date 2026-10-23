@@ -17,24 +17,23 @@ FriendGPT — CUDA Training Script
 import argparse
 import json
 import os
-import sys
 import signal
+import sys
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import torch
 from datasets import Dataset
+from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
     TrainerCallback,
+    TrainingArguments,
 )
-from peft import LoraConfig, get_peft_model, PeftModel, prepare_model_for_kbit_training
-from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
-
+from trl import DataCollatorForCompletionOnlyLM, SFTTrainer
 
 # ============================================================
 # Конфигурация по умолчанию (оптимизировано для RTX 4070 Ti 12GB)
@@ -53,14 +52,20 @@ DEFAULT_SAVE_STEPS = 500
 DEFAULT_LOGGING_STEPS = 50
 
 LORA_TARGET_MODULES = [
-    "q_proj", "k_proj", "v_proj", "o_proj",
-    "gate_proj", "up_proj", "down_proj",
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
 ]
 
 
 # ============================================================
 # Утилиты
 # ============================================================
+
 
 class Colors:
     GREEN = "\033[92m"
@@ -91,7 +96,9 @@ def log_err(msg):
 def check_gpu():
     """Проверяет наличие и параметры GPU."""
     if not torch.cuda.is_available():
-        log_err("CUDA не доступна! Убедитесь что установлены NVIDIA драйвера и CUDA toolkit.")
+        log_err(
+            "CUDA не доступна! Убедитесь что установлены NVIDIA драйвера и CUDA toolkit."
+        )
         sys.exit(1)
 
     gpu_name = torch.cuda.get_device_name(0)
@@ -129,7 +136,9 @@ def load_jsonl_dataset(data_dir: Path) -> tuple[Dataset, Dataset]:
     else:
         log_warn("valid.jsonl не найден, валидация будет пропущена")
 
-    return Dataset.from_list(train_data), Dataset.from_list(valid_data) if valid_data else None
+    return Dataset.from_list(train_data), (
+        Dataset.from_list(valid_data) if valid_data else None
+    )
 
 
 def format_chat(example, tokenizer):
@@ -156,6 +165,7 @@ def format_chat(example, tokenizer):
 # ============================================================
 # Callback для красивого вывода и безопасного прерывания
 # ============================================================
+
 
 class FriendGPTCallback(TrainerCallback):
     """Callback для логирования прогресса и обработки Ctrl+C."""
@@ -189,7 +199,9 @@ class FriendGPTCallback(TrainerCallback):
 
             loss = logs["loss"]
             lr = logs.get("learning_rate", 0)
-            log(f"Шаг {step}/{self.total_steps} ({pct:.1f}%) | loss: {loss:.4f} | lr: {lr:.2e} | ETA: {eta_str}")
+            log(
+                f"Шаг {step}/{self.total_steps} ({pct:.1f}%) | loss: {loss:.4f} | lr: {lr:.2e} | ETA: {eta_str}"
+            )
 
     def on_save(self, args, state, control, **kwargs):
         log_ok(f"Чекпоинт сохранён (шаг {state.global_step})")
@@ -204,6 +216,7 @@ class FriendGPTCallback(TrainerCallback):
 # ============================================================
 # Основной пайплайн обучения
 # ============================================================
+
 
 def train(args):
     # --- Проверка GPU ---
@@ -305,7 +318,9 @@ def train(args):
     model = prepare_model_for_kbit_training(model)
     model.config.use_cache = False
 
-    log_ok(f"Модель загружена: {sum(p.numel() for p in model.parameters()) / 1e9:.1f}B параметров")
+    log_ok(
+        f"Модель загружена: {sum(p.numel() for p in model.parameters()) / 1e9:.1f}B параметров"
+    )
 
     # --- LoRA конфигурация ---
     log("Настройка LoRA адаптера...")
@@ -322,7 +337,9 @@ def train(args):
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    log_ok(f"LoRA: {trainable/1e6:.1f}M обучаемых / {total/1e9:.1f}B всего ({100*trainable/total:.2f}%)")
+    log_ok(
+        f"LoRA: {trainable/1e6:.1f}M обучаемых / {total/1e9:.1f}B всего ({100*trainable/total:.2f}%)"
+    )
 
     # --- Вычисляем шаги ---
     steps_per_epoch = len(train_dataset) // (batch_size * args.grad_accum)
@@ -438,7 +455,9 @@ def train(args):
         "trained_at": datetime.now().isoformat(),
         "gpu": torch.cuda.get_device_name(0),
     }
-    with open(final_adapter_dir / "friendgpt_metadata.json", "w", encoding="utf-8") as f:
+    with open(
+        final_adapter_dir / "friendgpt_metadata.json", "w", encoding="utf-8"
+    ) as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     log_ok(f"\nАдаптер сохранён в: {final_adapter_dir}")
@@ -452,6 +471,7 @@ def train(args):
 # ============================================================
 # Merge — слияние LoRA с базовой моделью (full precision)
 # ============================================================
+
 
 def merge(args):
     """Сливает LoRA адаптер с базовой моделью."""
@@ -493,6 +513,7 @@ def merge(args):
 # CLI
 # ============================================================
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="FriendGPT CUDA Training — обучение на NVIDIA GPU",
@@ -503,9 +524,16 @@ def main():
     # --- train ---
     p_train = subparsers.add_parser("train", help="Обучить LoRA адаптер")
     p_train.add_argument("--friend", type=str, help="Имя друга (из FriendGPT)")
-    p_train.add_argument("--data-dir", type=str, help="Путь к датасету (вместо --friend)")
+    p_train.add_argument(
+        "--data-dir", type=str, help="Путь к датасету (вместо --friend)"
+    )
     p_train.add_argument("--output-dir", type=str, help="Куда сохранить результат")
-    p_train.add_argument("--model", type=str, default=DEFAULT_MODEL, help=f"Базовая модель (default: {DEFAULT_MODEL})")
+    p_train.add_argument(
+        "--model",
+        type=str,
+        default=DEFAULT_MODEL,
+        help=f"Базовая модель (default: {DEFAULT_MODEL})",
+    )
     p_train.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     p_train.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     p_train.add_argument("--grad-accum", type=int, default=DEFAULT_GRAD_ACCUM)
@@ -516,14 +544,27 @@ def main():
     p_train.add_argument("--lora-dropout", type=float, default=DEFAULT_LORA_DROPOUT)
     p_train.add_argument("--save-steps", type=int, default=DEFAULT_SAVE_STEPS)
     p_train.add_argument("--logging-steps", type=int, default=DEFAULT_LOGGING_STEPS)
-    p_train.add_argument("--resume", action="store_true", help="Продолжить с последнего чекпоинта")
-    p_train.add_argument("--flash-attn", action="store_true", help="Использовать Flash Attention 2")
-    p_train.add_argument("--hf-token", type=str, default=None, help="Hugging Face token (для gated моделей)")
+    p_train.add_argument(
+        "--resume", action="store_true", help="Продолжить с последнего чекпоинта"
+    )
+    p_train.add_argument(
+        "--flash-attn", action="store_true", help="Использовать Flash Attention 2"
+    )
+    p_train.add_argument(
+        "--hf-token",
+        type=str,
+        default=None,
+        help="Hugging Face token (для gated моделей)",
+    )
 
     # --- merge ---
     p_merge = subparsers.add_parser("merge", help="Слить LoRA с базовой моделью")
-    p_merge.add_argument("--adapter-dir", type=str, required=True, help="Путь к LoRA адаптеру")
-    p_merge.add_argument("--output-dir", type=str, required=True, help="Куда сохранить merged модель")
+    p_merge.add_argument(
+        "--adapter-dir", type=str, required=True, help="Путь к LoRA адаптеру"
+    )
+    p_merge.add_argument(
+        "--output-dir", type=str, required=True, help="Куда сохранить merged модель"
+    )
     p_merge.add_argument("--model", type=str, default=DEFAULT_MODEL)
     p_merge.add_argument("--hf-token", type=str, default=None)
 
