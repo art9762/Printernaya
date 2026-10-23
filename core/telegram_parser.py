@@ -5,20 +5,21 @@
 структурированные данные разговоров для последующего использования в обучении.
 """
 
+import glob
 import json
 import re
+import statistics
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
-from collections import defaultdict, Counter
-import statistics
-import glob
 
 
 @dataclass
 class ConversationTurn:
     """Один ход в разговоре."""
+
     role: str  # "user", "assistant", "system"
     name: str  # Имя участника
     text: str  # Текст сообщения
@@ -28,6 +29,7 @@ class ConversationTurn:
 @dataclass
 class Message:
     """Структурированное сообщение из Telegram."""
+
     from_name: str  # Имя отправителя
     from_id: str  # ID отправителя
     date: datetime  # Время отправления
@@ -41,11 +43,14 @@ class Message:
 @dataclass
 class PersonalityProfile:
     """Профиль личности на основе истории чата."""
+
     frequently_used_words: dict[str, int]  # Слово -> количество
     emoji_patterns: dict[str, int]  # Эмодзи -> количество
     average_message_length: float  # Средняя длина сообщения
     median_message_length: float  # Медианная длина сообщения
-    response_time_stats: dict[str, float]  # Статистика времени ответа (mean, median, std)
+    response_time_stats: dict[
+        str, float
+    ]  # Статистика времени ответа (mean, median, std)
     slang_expressions: list[tuple[str, int]]  # (выражение, количество) отсортированные
     message_count: int  # Общее количество сообщений
     unique_words: int  # Количество уникальных слов
@@ -77,15 +82,15 @@ class TelegramParser:
         """
         json_path = Path(json_path)
 
-        with open(json_path, 'r', encoding='utf-8') as f:
+        with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
         self.messages = []
         self.participants = set()
 
         # Извлекаем сообщения из массива "messages"
-        if isinstance(data, dict) and 'messages' in data:
-            messages_raw = data['messages']
+        if isinstance(data, dict) and "messages" in data:
+            messages_raw = data["messages"]
         elif isinstance(data, list):
             messages_raw = data
         else:
@@ -113,9 +118,9 @@ class TelegramParser:
         """
         format_type = auto_detect_format(str(path))
 
-        if format_type == 'json':
+        if format_type == "json":
             return self.parse_file(path)
-        elif format_type == 'html':
+        elif format_type == "html":
             html_parser = TelegramHTMLParser(strip_links=self.strip_links)
             path_obj = Path(path)
 
@@ -145,28 +150,28 @@ class TelegramParser:
             Message или None если это сервисное сообщение
         """
         # Проверяем наличие обязательных полей
-        if 'from' not in msg_raw or 'date' not in msg_raw:
+        if "from" not in msg_raw or "date" not in msg_raw:
             return None
 
-        from_name = msg_raw.get('from', '')
-        from_id = str(msg_raw.get('from_id', ''))
+        from_name = msg_raw.get("from", "")
+        from_id = str(msg_raw.get("from_id", ""))
 
         # Парсим дату (в ISO 8601 формате: "2023-01-15T12:34:56")
         try:
-            date_str = msg_raw.get('date', '')
-            date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            date_str = msg_raw.get("date", "")
+            date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
             return None
 
         # Проверяем на сервисные сообщения
-        is_service = msg_raw.get('type', '') == 'service' or 'action' in msg_raw
+        is_service = msg_raw.get("type", "") == "service" or "action" in msg_raw
 
         # Если это сервисное сообщение и нет текста, пропускаем
-        if is_service and 'text' not in msg_raw:
+        if is_service and "text" not in msg_raw:
             return None
 
         # Извлекаем текст (может быть строка или список)
-        original_text, is_media = self._extract_text(msg_raw.get('text', ''))
+        original_text, is_media = self._extract_text(msg_raw.get("text", ""))
 
         # Очищаем текст
         text = self._clean_text(original_text)
@@ -176,7 +181,11 @@ class TelegramParser:
             return None
 
         # Проверяем на переадресованные сообщения
-        is_forward = 'forwarded_from' in msg_raw or msg_raw.get('type', '') == 'message' and 'forwarded' in msg_raw
+        is_forward = (
+            "forwarded_from" in msg_raw
+            or msg_raw.get("type", "") == "message"
+            and "forwarded" in msg_raw
+        )
 
         return Message(
             from_name=from_name,
@@ -186,7 +195,7 @@ class TelegramParser:
             is_forward=is_forward,
             is_media=is_media,
             is_service=is_service,
-            original_text=original_text
+            original_text=original_text,
         )
 
     def _extract_text(self, text_field: Any) -> tuple[str, bool]:
@@ -211,22 +220,28 @@ class TelegramParser:
                     text_parts.append(item)
                 elif isinstance(item, dict):
                     # Объект с "type" и "text"
-                    if item.get('type') == 'link':
-                        text_parts.append(item.get('text', ''))
-                    elif item.get('type') == 'mention':
-                        text_parts.append(item.get('text', ''))
-                    elif item.get('type') == 'hashtag':
-                        text_parts.append(item.get('text', ''))
-                    elif item.get('type') == 'emoji':
-                        text_parts.append(item.get('text', ''))
-                    elif item.get('type') in ('photo', 'video', 'sticker', 'audio', 'file'):
+                    if item.get("type") == "link":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "mention":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "hashtag":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "emoji":
+                        text_parts.append(item.get("text", ""))
+                    elif item.get("type") in (
+                        "photo",
+                        "video",
+                        "sticker",
+                        "audio",
+                        "file",
+                    ):
                         is_media = True
                     else:
-                        text_parts.append(item.get('text', ''))
+                        text_parts.append(item.get("text", ""))
 
-            return ''.join(text_parts), is_media
+            return "".join(text_parts), is_media
 
-        return '', is_media
+        return "", is_media
 
     def _clean_text(self, text: str) -> str:
         """
@@ -240,11 +255,11 @@ class TelegramParser:
         """
         # Удаляем ссылки если требуется
         if self.strip_links:
-            text = re.sub(r'https?://\S+', '', text)
-            text = re.sub(r'www\.\S+', '', text)
+            text = re.sub(r"https?://\S+", "", text)
+            text = re.sub(r"www\.\S+", "", text)
 
         # Удаляем множественные пробелы
-        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r"\s+", " ", text)
 
         # Удаляем ведущие/завершающие пробелы
         text = text.strip()
@@ -252,10 +267,7 @@ class TelegramParser:
         return text
 
     def extract_conversation_pairs(
-        self,
-        participant1: str,
-        participant2: str,
-        merge_threshold_seconds: int = 120
+        self, participant1: str, participant2: str, merge_threshold_seconds: int = 120
     ) -> list[tuple[Message, Message]]:
         """
         Извлекает пары (сообщение1 -> ответ2) для двух участников.
@@ -270,14 +282,17 @@ class TelegramParser:
         """
         # Фильтруем только сообщения этих двух участников
         filtered_msgs = [
-            m for m in self.messages
+            m
+            for m in self.messages
             if m.from_name in (participant1, participant2)
             and not m.is_service
             and not m.is_forward
         ]
 
         # Объединяем последовательные сообщения от одного человека
-        merged_msgs = self._merge_consecutive_messages(filtered_msgs, merge_threshold_seconds)
+        merged_msgs = self._merge_consecutive_messages(
+            filtered_msgs, merge_threshold_seconds
+        )
 
         pairs = []
         i = 0
@@ -295,9 +310,7 @@ class TelegramParser:
         return pairs
 
     def _merge_consecutive_messages(
-        self,
-        messages: list[Message],
-        threshold_seconds: int
+        self, messages: list[Message], threshold_seconds: int
     ) -> list[Message]:
         """
         Объединяет последовательные сообщения от одного человека в один.
@@ -320,8 +333,10 @@ class TelegramParser:
             prev = messages[i - 1]
 
             # Проверяем: одинаковый ли отправитель и близко ли по времени
-            if (msg.from_name == prev.from_name and
-                (msg.date - prev.date).total_seconds() <= threshold_seconds):
+            if (
+                msg.from_name == prev.from_name
+                and (msg.date - prev.date).total_seconds() <= threshold_seconds
+            ):
                 current_group.append(msg)
             else:
                 # Завершаем группу
@@ -349,7 +364,7 @@ class TelegramParser:
         last = messages[-1]
 
         # Объединяем текст с переносами строк
-        merged_text = '\n'.join(m.text for m in messages)
+        merged_text = "\n".join(m.text for m in messages)
 
         return Message(
             from_name=first.from_name,
@@ -359,14 +374,11 @@ class TelegramParser:
             is_forward=any(m.is_forward for m in messages),
             is_media=any(m.is_media for m in messages),
             is_service=any(m.is_service for m in messages),
-            original_text=first.original_text
+            original_text=first.original_text,
         )
 
     def build_training_dataset(
-        self,
-        participant1: str,
-        participant2: str,
-        system_prompt: Optional[str] = None
+        self, participant1: str, participant2: str, system_prompt: Optional[str] = None
     ) -> list[dict[str, str]]:
         """
         Создает датасет в формате для обучения (system/user/assistant).
@@ -390,16 +402,14 @@ class TelegramParser:
             turn = {
                 "system": system_prompt,
                 "user": user_msg.text,
-                "assistant": assistant_msg.text
+                "assistant": assistant_msg.text,
             }
             dataset.append(turn)
 
         return dataset
 
     def extract_personality_profile(
-        self,
-        participant: str,
-        exclude_words: Optional[list[str]] = None
+        self, participant: str, exclude_words: Optional[list[str]] = None
     ) -> PersonalityProfile:
         """
         Извлекает профиль личности участника на основе его сообщений.
@@ -413,10 +423,9 @@ class TelegramParser:
         """
         # Фильтруем сообщения участника
         user_messages = [
-            m for m in self.messages
-            if m.from_name == participant
-            and not m.is_service
-            and not m.is_forward
+            m
+            for m in self.messages
+            if m.from_name == participant and not m.is_service and not m.is_forward
         ]
 
         if not user_messages:
@@ -428,7 +437,7 @@ class TelegramParser:
                 response_time_stats={},
                 slang_expressions=[],
                 message_count=0,
-                unique_words=0
+                unique_words=0,
             )
 
         # Анализируем слова
@@ -438,7 +447,7 @@ class TelegramParser:
 
         for msg in user_messages:
             # Извлекаем слова
-            words = re.findall(r'\w+', msg.text.lower())
+            words = re.findall(r"\w+", msg.text.lower())
             message_lengths.append(len(msg.text))
 
             for word in words:
@@ -448,16 +457,16 @@ class TelegramParser:
         # Анализируем эмодзи
         emoji_pattern = re.compile(
             "["
-            "\U0001F600-\U0001F64F"  # Emoticons
-            "\U0001F300-\U0001F5FF"  # Symbols & pictographs
-            "\U0001F680-\U0001F6FF"  # Transport & map symbols
-            "\U0001F1E0-\U0001F1FF"  # Flags (iOS)
-            "\U00002702-\U000027B0"
-            "\U000024C2-\U0001F251"
+            "\U0001f600-\U0001f64f"  # Emoticons
+            "\U0001f300-\U0001f5ff"  # Symbols & pictographs
+            "\U0001f680-\U0001f6ff"  # Transport & map symbols
+            "\U0001f1e0-\U0001f1ff"  # Flags (iOS)
+            "\U00002702-\U000027b0"
+            "\U000024c2-\U0001f251"
             "\U0001f926-\U0001f937"
             "\U00010000-\U0010ffff"
             "\u2640-\u2642"
-            "\u2600-\u2B55"
+            "\u2600-\u2b55"
             "\u200d"
             "\u23cf"
             "\u23e9"
@@ -465,7 +474,7 @@ class TelegramParser:
             "\ufe0f"
             "\u3030"
             "]+",
-            flags=re.UNICODE
+            flags=re.UNICODE,
         )
 
         emoji_counter = Counter()
@@ -482,7 +491,8 @@ class TelegramParser:
 
         # Извлекаем сленг и выражения (слова длиной > 3 символов, часто используемые)
         slang_expressions = [
-            (word, count) for word, count in word_counter.most_common(20)
+            (word, count)
+            for word, count in word_counter.most_common(20)
             if len(word) > 3
         ]
 
@@ -494,7 +504,7 @@ class TelegramParser:
             response_time_stats=response_times,
             slang_expressions=slang_expressions,
             message_count=len(user_messages),
-            unique_words=len(word_counter)
+            unique_words=len(word_counter),
         )
 
     def _calculate_response_times(self, participant: str) -> dict[str, float]:
@@ -520,16 +530,14 @@ class TelegramParser:
                         response_times.append(response_time)
 
         if not response_times:
-            return {
-                'mean': 0,
-                'median': 0,
-                'std_dev': 0
-            }
+            return {"mean": 0, "median": 0, "std_dev": 0}
 
         return {
-            'mean': statistics.mean(response_times),
-            'median': statistics.median(response_times),
-            'std_dev': statistics.stdev(response_times) if len(response_times) > 1 else 0
+            "mean": statistics.mean(response_times),
+            "median": statistics.median(response_times),
+            "std_dev": (
+                statistics.stdev(response_times) if len(response_times) > 1 else 0
+            ),
         }
 
     def _get_default_stopwords(self) -> set[str]:
@@ -540,24 +548,111 @@ class TelegramParser:
             Множество стопслов
         """
         russian_stopwords = {
-            'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'а', 'то',
-            'все', 'она', 'так', 'его', 'но', 'да', 'ты', 'к', 'у', 'же', 'вы',
-            'за', 'бы', 'по', 'только', 'ее', 'мне', 'было', 'вот', 'от', 'ему',
-            'еще', 'при', 'как', 'а', 'это', 'эти', 'нибудь', 'ибо', 'либо',
-            'для', 'ж', 'ц', 'щ', 'х'
+            "и",
+            "в",
+            "во",
+            "не",
+            "что",
+            "он",
+            "на",
+            "я",
+            "с",
+            "со",
+            "а",
+            "то",
+            "все",
+            "она",
+            "так",
+            "его",
+            "но",
+            "да",
+            "ты",
+            "к",
+            "у",
+            "же",
+            "вы",
+            "за",
+            "бы",
+            "по",
+            "только",
+            "ее",
+            "мне",
+            "было",
+            "вот",
+            "от",
+            "ему",
+            "еще",
+            "при",
+            "как",
+            "а",
+            "это",
+            "эти",
+            "нибудь",
+            "ибо",
+            "либо",
+            "для",
+            "ж",
+            "ц",
+            "щ",
+            "х",
         }
 
         english_stopwords = {
-            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-            'of', 'is', 'are', 'am', 'was', 'were', 'be', 'have', 'has', 'had',
-            'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
-            'can', 'it', 'its', 'this', 'that', 'these', 'those', 'i', 'you', 'he',
-            'she', 'we', 'they', 'what', 'which', 'who', 'why', 'how'
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "is",
+            "are",
+            "am",
+            "was",
+            "were",
+            "be",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "it",
+            "its",
+            "this",
+            "that",
+            "these",
+            "those",
+            "i",
+            "you",
+            "he",
+            "she",
+            "we",
+            "they",
+            "what",
+            "which",
+            "who",
+            "why",
+            "how",
         }
 
         return russian_stopwords | english_stopwords
 
-    def messages_to_turns(self, user_name: Optional[str] = None) -> list[ConversationTurn]:
+    def messages_to_turns(
+        self, user_name: Optional[str] = None
+    ) -> list[ConversationTurn]:
         """
         Конвертирует Message-объекты в ConversationTurn для DatasetBuilder.
 
@@ -572,12 +667,14 @@ class TelegramParser:
             if msg.is_service or msg.is_forward:
                 continue
             role = "user"  # DatasetBuilder сам определит роли
-            turns.append(ConversationTurn(
-                role=role,
-                name=msg.from_name,
-                text=msg.text,
-                timestamp=msg.date,
-            ))
+            turns.append(
+                ConversationTurn(
+                    role=role,
+                    name=msg.from_name,
+                    text=msg.text,
+                    timestamp=msg.date,
+                )
+            )
         return turns
 
     def get_statistics(self) -> dict[str, Any]:
@@ -604,18 +701,19 @@ class TelegramParser:
 
         date_range = (
             f"{self.messages[0].date.date()} - {self.messages[-1].date.date()}"
-            if self.messages else "N/A"
+            if self.messages
+            else "N/A"
         )
 
         return {
-            'total_messages': total_messages,
-            'participants': list(self.participants),
-            'participant_count': len(self.participants),
-            'messages_by_participant': dict(messages_by_participant),
-            'media_messages': media_count,
-            'forward_messages': forward_count,
-            'service_messages': service_count,
-            'date_range': date_range
+            "total_messages": total_messages,
+            "participants": list(self.participants),
+            "participant_count": len(self.participants),
+            "messages_by_participant": dict(messages_by_participant),
+            "media_messages": media_count,
+            "forward_messages": forward_count,
+            "service_messages": service_count,
+            "date_range": date_range,
         }
 
 
@@ -658,12 +756,12 @@ class TelegramHTMLParser:
 
         # Собираем все файлы messages*.html и сортируем по номеру
         message_files = sorted(
-            directory_path.glob('messages*.html'),
+            directory_path.glob("messages*.html"),
             key=lambda p: (
-                int(re.search(r'\d+', p.stem).group(0))
-                if re.search(r'\d+', p.stem)
+                int(re.search(r"\d+", p.stem).group(0))
+                if re.search(r"\d+", p.stem)
                 else 0
-            )
+            ),
         )
 
         if not message_files:
@@ -707,34 +805,40 @@ class TelegramHTMLParser:
         """
         from bs4 import BeautifulSoup
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            soup = BeautifulSoup(f.read(), 'html.parser')
+        with open(file_path, "r", encoding="utf-8") as f:
+            soup = BeautifulSoup(f.read(), "html.parser")
 
         # Находим все div'ы с классом "message" (включая default, service, joined)
-        message_divs = soup.find_all('div', class_='message')
+        message_divs = soup.find_all("div", class_="message")
 
         for msg_div in message_divs:
-            classes = msg_div.get('class', [])
+            classes = msg_div.get("class", [])
 
             # Пропускаем сервисные сообщения
-            if 'service' in classes:
+            if "service" in classes:
                 continue
 
-            is_joined = 'joined' in classes
+            is_joined = "joined" in classes
 
             # Проверяем на пересланные сообщения
-            forwarded_div = msg_div.find('div', class_='forwarded')
+            forwarded_div = msg_div.find("div", class_="forwarded")
             is_forward = forwarded_div is not None
 
             # Извлекаем имя отправителя (НЕ из вложенного forwarded блока)
             # Ищем body > from_name, но не body > forwarded > from_name
-            body_div = msg_div.find('div', class_='body', recursive=False) or msg_div.find('div', class_='body')
+            body_div = msg_div.find(
+                "div", class_="body", recursive=False
+            ) or msg_div.find("div", class_="body")
             from_name = None
 
             if body_div:
                 # Ищем from_name как прямого потомка body, а не вложенного в forwarded
                 for child in body_div.children:
-                    if hasattr(child, 'get') and child.get('class') and 'from_name' in child.get('class', []):
+                    if (
+                        hasattr(child, "get")
+                        and child.get("class")
+                        and "from_name" in child.get("class", [])
+                    ):
                         from_name = child.get_text(strip=True)
                         self._last_from_name = from_name
                         break
@@ -752,40 +856,49 @@ class TelegramHTMLParser:
             date_div = None
             if body_div:
                 for child in body_div.children:
-                    if hasattr(child, 'get') and child.get('class'):
-                        child_classes = child.get('class', [])
-                        if 'date' in child_classes and 'details' in child_classes:
+                    if hasattr(child, "get") and child.get("class"):
+                        child_classes = child.get("class", [])
+                        if "date" in child_classes and "details" in child_classes:
                             date_div = child
                             break
             if not date_div:
                 # Фоллбэк: ищем где угодно, но не в forwarded
-                date_div = msg_div.find('div', class_=lambda c: c and 'date' in c.split() and 'details' in c.split())
+                date_div = msg_div.find(
+                    "div",
+                    class_=lambda c: c
+                    and "date" in c.split()
+                    and "details" in c.split(),
+                )
 
             if not date_div:
                 continue
 
-            date_title = date_div.get('title', '')
+            date_title = date_div.get("title", "")
             msg_date = self._parse_date(date_title)
             if not msg_date:
                 continue
 
             # Проверяем на медиа
-            is_media = msg_div.find('div', class_='media_wrap') is not None
+            is_media = msg_div.find("div", class_="media_wrap") is not None
 
             # Извлекаем текст — из основного text div, НЕ из forwarded
             text_div = None
             if body_div and not is_forward:
                 for child in body_div.children:
-                    if hasattr(child, 'get') and child.get('class') and 'text' in child.get('class', []):
+                    if (
+                        hasattr(child, "get")
+                        and child.get("class")
+                        and "text" in child.get("class", [])
+                    ):
                         text_div = child
                         break
             if not text_div:
-                text_div = msg_div.find('div', class_='text')
+                text_div = msg_div.find("div", class_="text")
             if not text_div:
                 continue
 
             # Получаем весь текст (включая вложенные span, a и т.д.)
-            text_content = text_div.get_text(separator=' ', strip=True)
+            text_content = text_div.get_text(separator=" ", strip=True)
 
             if not text_content:
                 continue
@@ -799,13 +912,13 @@ class TelegramHTMLParser:
             # Создаем сообщение
             msg = Message(
                 from_name=from_name,
-                from_id='',  # HTML экспорт не содержит ID
+                from_id="",  # HTML экспорт не содержит ID
                 date=msg_date,
                 text=cleaned_text,
                 is_forward=is_forward,
                 is_media=is_media,
                 is_service=False,
-                original_text=text_content
+                original_text=text_content,
             )
 
             self.messages.append(msg)
@@ -823,8 +936,8 @@ class TelegramHTMLParser:
         """
         try:
             match = re.match(
-                r'(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})',
-                date_str
+                r"(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})",
+                date_str,
             )
             if match:
                 day, month, year, hour, minute, second = map(int, match.groups())
@@ -845,11 +958,11 @@ class TelegramHTMLParser:
         """
         # Удаляем ссылки если требуется
         if self.strip_links:
-            text = re.sub(r'https?://\S+', '', text)
-            text = re.sub(r'www\.\S+', '', text)
+            text = re.sub(r"https?://\S+", "", text)
+            text = re.sub(r"www\.\S+", "", text)
 
         # Удаляем множественные пробелы
-        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r"\s+", " ", text)
 
         # Удаляем ведущие/завершающие пробелы
         text = text.strip()
@@ -873,15 +986,15 @@ def auto_detect_format(path: str) -> str:
     path_obj = Path(path)
 
     # Проверяем расширение файла
-    if str(path).endswith('.json'):
-        return 'json'
-    elif str(path).endswith('.html'):
-        return 'html'
+    if str(path).endswith(".json"):
+        return "json"
+    elif str(path).endswith(".html"):
+        return "html"
 
     # Проверяем если это директория с HTML экспортом
     if path_obj.is_dir():
-        if (path_obj / 'messages.html').exists():
-            return 'html'
+        if (path_obj / "messages.html").exists():
+            return "html"
 
     raise ValueError(
         f"Не удалось определить формат экспорта для '{path}'. "
@@ -890,6 +1003,7 @@ def auto_detect_format(path: str) -> str:
 
 
 # Примеры использования и вспомогательные функции
+
 
 def load_and_analyze(json_path: str, participant1: str, participant2: str) -> None:
     """

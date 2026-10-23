@@ -9,17 +9,19 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
-from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Импорт лёгких модулей ядра (парсер и датасет)
 try:
-    from core.telegram_parser import TelegramParser
     from core.dataset_builder import DatasetBuilder
+    from core.telegram_parser import TelegramParser
 except ImportError:
-    print("Ошибка: не удалось импортировать модули core/. Убедитесь, что проект установлен правильно.")
+    print(
+        "Ошибка: не удалось импортировать модули core/. Убедитесь, что проект установлен правильно."
+    )
     sys.exit(1)
 
 # Тяжёлые модули (mlx_lm) загружаются лениво — только при train/fuse/chat
@@ -32,23 +34,30 @@ def _ensure_ml_imports():
     global FriendModel, FriendEngine
     if FriendModel is None:
         try:
-            from core.trainer import FriendModel as _FM
             from core.inference import FriendEngine as _FE
+            from core.trainer import FriendModel as _FM
+
             FriendModel = _FM
             FriendEngine = _FE
         except ImportError as e:
-            print(f"Ошибка: для этой команды нужен mlx_lm. Установите: pip install mlx mlx-lm")
+            print(
+                f"Ошибка: для этой команды нужен mlx_lm. Установите: pip install mlx mlx-lm"
+            )
             print(f"Детали: {e}")
             sys.exit(1)
 
+
 try:
     from tqdm import tqdm
+
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
 
 try:
-    from colorama import Fore, Style, init as colorama_init
+    from colorama import Fore, Style
+    from colorama import init as colorama_init
+
     colorama_init()
     HAS_COLORAMA = True
 except ImportError:
@@ -67,7 +76,7 @@ class ColorScheme:
     reset: str
 
     @staticmethod
-    def create_default() -> 'ColorScheme':
+    def create_default() -> "ColorScheme":
         """Создаёт цветовую схему по умолчанию."""
         if HAS_COLORAMA:
             return ColorScheme(
@@ -76,17 +85,17 @@ class ColorScheme:
                 system=Fore.YELLOW,
                 error=Fore.RED,
                 success=Fore.GREEN,
-                reset=Style.RESET_ALL
+                reset=Style.RESET_ALL,
             )
         else:
             # ANSI коды
             return ColorScheme(
-                user='\033[36m',
-                friend='\033[32m',
-                system='\033[33m',
-                error='\033[31m',
-                success='\033[32m',
-                reset='\033[0m'
+                user="\033[36m",
+                friend="\033[32m",
+                system="\033[33m",
+                error="\033[31m",
+                success="\033[32m",
+                reset="\033[0m",
             )
 
 
@@ -103,22 +112,27 @@ class FriendManager:
     def _load_metadata(self) -> None:
         """Загружает метаданные о друзьях."""
         if self.metadata_file.exists():
-            with open(self.metadata_file, 'r', encoding='utf-8') as f:
+            with open(self.metadata_file, "r", encoding="utf-8") as f:
                 self.metadata = json.load(f)
         else:
             self.metadata = {}
 
     def _save_metadata(self) -> None:
         """Сохраняет метаданные о друзьях."""
-        with open(self.metadata_file, 'w', encoding='utf-8') as f:
+        with open(self.metadata_file, "w", encoding="utf-8") as f:
             json.dump(self.metadata, f, ensure_ascii=False, indent=2)
 
     def get_friend_dir(self, friend_name: str) -> Path:
         """Получает директорию друга."""
-        if (not friend_name or friend_name in {".", ".."}
-                or friend_name != friend_name.rstrip(" .")
-                or any(char in friend_name for char in '/\\:')):
-            raise ValueError("Имя друга должно быть одним именем каталога без /, \\ и : и без точки/пробела в конце")
+        if (
+            not friend_name
+            or friend_name in {".", ".."}
+            or friend_name != friend_name.rstrip(" .")
+            or any(char in friend_name for char in "/\\:")
+        ):
+            raise ValueError(
+                "Имя друга должно быть одним именем каталога без /, \\ и : и без точки/пробела в конце"
+            )
         return self.data_dir / friend_name
 
     def friend_exists(self, friend_name: str) -> bool:
@@ -132,7 +146,7 @@ class FriendManager:
                 "status": status,
                 "sources": [],  # Список источников данных
                 "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now().isoformat(),
             }
         else:
             # Друг уже есть — сбрасываем статус на imported (датасет обновился)
@@ -140,8 +154,14 @@ class FriendManager:
             self.metadata[friend_name]["updated_at"] = datetime.now().isoformat()
         self._save_metadata()
 
-    def add_source(self, friend_name: str, source_type: str, source_path: str,
-                   dataset_dir: str, num_examples: int = 0) -> None:
+    def add_source(
+        self,
+        friend_name: str,
+        source_type: str,
+        source_path: str,
+        dataset_dir: str,
+        num_examples: int = 0,
+    ) -> None:
         """
         Добавляет источник данных для друга.
 
@@ -159,13 +179,15 @@ class FriendManager:
         if "sources" not in self.metadata[friend_name]:
             self.metadata[friend_name]["sources"] = []
 
-        self.metadata[friend_name]["sources"].append({
-            "type": source_type,
-            "source_path": source_path,
-            "dataset_dir": dataset_dir,
-            "num_examples": num_examples,
-            "added_at": datetime.now().isoformat()
-        })
+        self.metadata[friend_name]["sources"].append(
+            {
+                "type": source_type,
+                "source_path": source_path,
+                "dataset_dir": dataset_dir,
+                "num_examples": num_examples,
+                "added_at": datetime.now().isoformat(),
+            }
+        )
         self.metadata[friend_name]["updated_at"] = datetime.now().isoformat()
         self._save_metadata()
 
@@ -215,7 +237,9 @@ class FriendManager:
 class ChatInterface:
     """Интерфейс для интерактивного чата."""
 
-    def __init__(self, friend_name: str, inference_engine: FriendEngine, colors: ColorScheme):
+    def __init__(
+        self, friend_name: str, inference_engine: FriendEngine, colors: ColorScheme
+    ):
         self.friend_name = friend_name
         self.inference = inference_engine
         self.colors = colors
@@ -232,7 +256,11 @@ class ChatInterface:
         idx = 0
 
         while time.time() - start_time < duration:
-            print(f"\r{self.friend_name} {self.colors.system}печатает{dots[idx % 3]}{self.colors.reset}", end="", flush=True)
+            print(
+                f"\r{self.friend_name} {self.colors.system}печатает{dots[idx % 3]}{self.colors.reset}",
+                end="",
+                flush=True,
+            )
             time.sleep(0.2)
             idx += 1
 
@@ -248,7 +276,9 @@ class ChatInterface:
             return False
         elif command == "/reset":
             self.history.clear()
-            self._print_colored(self.colors.system, "История очищена", self.colors.system)
+            self._print_colored(
+                self.colors.system, "История очищена", self.colors.system
+            )
             return True
         elif command == "/save":
             self._save_conversation()
@@ -257,7 +287,9 @@ class ChatInterface:
             self._print_help()
             return True
         else:
-            self._print_colored(self.colors.error, f"Неизвестная команда: {command}", self.colors.error)
+            self._print_colored(
+                self.colors.error, f"Неизвестная команда: {command}", self.colors.error
+            )
             return True
 
     def _save_conversation(self) -> None:
@@ -265,10 +297,12 @@ class ChatInterface:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"chat_{self.friend_name}_{timestamp}.json"
 
-        with open(filename, 'w', encoding='utf-8') as f:
+        with open(filename, "w", encoding="utf-8") as f:
             json.dump(self.history, f, ensure_ascii=False, indent=2)
 
-        self._print_colored(self.colors.system, f"Разговор сохранён в {filename}", self.colors.system)
+        self._print_colored(
+            self.colors.system, f"Разговор сохранён в {filename}", self.colors.system
+        )
 
     def _print_help(self) -> None:
         """Выводит справку по командам."""
@@ -286,7 +320,7 @@ class ChatInterface:
         self._print_colored(
             self.colors.system,
             f"Чат с {self.friend_name}. Напишите /help для справки.",
-            self.colors.system
+            self.colors.system,
         )
 
         while True:
@@ -311,18 +345,16 @@ class ChatInterface:
                 response = self.inference.chat(user_input)
 
                 # Выводим ответ
-                self._print_colored(
-                    self.friend_name,
-                    response,
-                    self.colors.friend
-                )
+                self._print_colored(self.friend_name, response, self.colors.friend)
 
                 # Добавляем в историю
                 self.history.append({"role": "friend", "content": response})
 
             except KeyboardInterrupt:
                 print()
-                self._print_colored(self.colors.system, "Чат прерван", self.colors.system)
+                self._print_colored(
+                    self.colors.system, "Чат прерван", self.colors.system
+                )
                 break
             except EOFError:
                 break
@@ -331,7 +363,12 @@ class ChatInterface:
 class GroupChatInterface:
     """Интерфейс для группового чата с несколькими друзьями."""
 
-    def __init__(self, friend_names: List[str], inference_engines: Dict[str, FriendEngine], colors: ColorScheme):
+    def __init__(
+        self,
+        friend_names: List[str],
+        inference_engines: Dict[str, FriendEngine],
+        colors: ColorScheme,
+    ):
         self.friend_names = friend_names
         self.inference = inference_engines
         self.colors = colors
@@ -344,9 +381,12 @@ class GroupChatInterface:
         if HAS_COLORAMA:
             color_list = [Fore.GREEN, Fore.BLUE, Fore.MAGENTA, Fore.CYAN, Fore.YELLOW]
         else:
-            color_list = ['\033[32m', '\033[34m', '\033[35m', '\033[36m', '\033[33m']
+            color_list = ["\033[32m", "\033[34m", "\033[35m", "\033[36m", "\033[33m"]
 
-        return {name: color_list[i % len(color_list)] for i, name in enumerate(self.friend_names)}
+        return {
+            name: color_list[i % len(color_list)]
+            for i, name in enumerate(self.friend_names)
+        }
 
     def _print_colored(self, name: str, message: str, color: str) -> None:
         """Печатает сообщение с цветом."""
@@ -363,7 +403,9 @@ class GroupChatInterface:
             return False
         elif command == "/reset":
             self.history.clear()
-            self._print_colored(self.colors.system, "История очищена", self.colors.system)
+            self._print_colored(
+                self.colors.system, "История очищена", self.colors.system
+            )
             return True
         elif command == "/save":
             self._save_conversation()
@@ -372,7 +414,9 @@ class GroupChatInterface:
             self._print_help()
             return True
         else:
-            self._print_colored(self.colors.error, f"Неизвестная команда: {command}", self.colors.error)
+            self._print_colored(
+                self.colors.error, f"Неизвестная команда: {command}", self.colors.error
+            )
             return True
 
     def _save_conversation(self) -> None:
@@ -381,10 +425,12 @@ class GroupChatInterface:
         friend_list = "_".join(self.friend_names)
         filename = f"group_chat_{friend_list}_{timestamp}.json"
 
-        with open(filename, 'w', encoding='utf-8') as f:
+        with open(filename, "w", encoding="utf-8") as f:
             json.dump(self.history, f, ensure_ascii=False, indent=2)
 
-        self._print_colored(self.colors.system, f"Разговор сохранён в {filename}", self.colors.system)
+        self._print_colored(
+            self.colors.system, f"Разговор сохранён в {filename}", self.colors.system
+        )
 
     def _print_help(self) -> None:
         """Выводит справку по командам."""
@@ -403,7 +449,7 @@ class GroupChatInterface:
         self._print_colored(
             self.colors.system,
             f"Групповой чат с {friends_str}. Напишите /help для справки.",
-            self.colors.system
+            self.colors.system,
         )
 
         while True:
@@ -428,9 +474,7 @@ class GroupChatInterface:
                     response = self.inference[friend_name].chat(user_input)
 
                     self._print_colored(
-                        friend_name,
-                        response,
-                        self.friend_colors[friend_name]
+                        friend_name, response, self.friend_colors[friend_name]
                     )
 
                     # Добавляем в историю
@@ -440,7 +484,9 @@ class GroupChatInterface:
 
             except KeyboardInterrupt:
                 print()
-                self._print_colored(self.colors.system, "Чат прерван", self.colors.system)
+                self._print_colored(
+                    self.colors.system, "Чат прерван", self.colors.system
+                )
                 break
             except EOFError:
                 break
@@ -455,28 +501,36 @@ class FriendGPTCLI:
 
     def cmd_import(self, args: argparse.Namespace) -> int:
         """Команда: импортировать личный чат Telegram (автоопределение формата)."""
-        print(f"{self.colors.system}Импорт личного чата из {args.path}...{self.colors.reset}")
+        print(
+            f"{self.colors.system}Импорт личного чата из {args.path}...{self.colors.reset}"
+        )
 
         if not Path(args.path).exists():
-            print(f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}")
+            print(
+                f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}"
+            )
             return 1
 
         try:
             # Парсим файл Telegram с автоматическим определением формата
             parser = TelegramParser()
             messages = parser.parse_auto(args.path)
-            print(f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}")
+            print(
+                f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}"
+            )
 
             # Показываем участников
             stats = parser.get_statistics()
-            msg_by = stats.get('messages_by_participant', {})
+            msg_by = stats.get("messages_by_participant", {})
             print(f"\n{self.colors.system}Участники чата:{self.colors.reset}")
             for name, count in sorted(msg_by.items(), key=lambda x: -x[1]):
                 marker = " ← друг" if name == args.name else ""
                 print(f"  {name}: {count} сообщений{marker}")
 
             if args.name not in msg_by:
-                print(f"\n{self.colors.error}Имя «{args.name}» не найдено в чате!{self.colors.reset}")
+                print(
+                    f"\n{self.colors.error}Имя «{args.name}» не найдено в чате!{self.colors.reset}"
+                )
                 print(f"  Используйте одно из имён выше с флагом --name")
                 return 1
 
@@ -491,17 +545,20 @@ class FriendGPTCLI:
             # Строим датасет
             builder = DatasetBuilder()
             train_examples, valid_examples = builder.build_dataset(
-                turns=turns,
-                friend_name=args.name
+                turns=turns, friend_name=args.name
             )
 
             if not train_examples:
-                raise ValueError("Нет обучающих примеров: проверьте участника и длину ответов (минимум 3 слова)")
+                raise ValueError(
+                    "Нет обучающих примеров: проверьте участника и длину ответов (минимум 3 слова)"
+                )
 
             # Сохраняем датасет в поддиректорию
             friend_dir = self.manager.get_friend_dir(args.name)
             friend_dir.mkdir(exist_ok=True)
-            builder.save_dataset(train_examples, valid_examples, friend_dir / dataset_subdir)
+            builder.save_dataset(
+                train_examples, valid_examples, friend_dir / dataset_subdir
+            )
 
             # Регистрируем источник
             dataset_stats = builder.get_stats()
@@ -511,21 +568,29 @@ class FriendGPTCLI:
                 source_type="personal",
                 source_path=str(args.path),
                 dataset_dir=dataset_subdir,
-                num_examples=dataset_stats.total_examples
+                num_examples=dataset_stats.total_examples,
             )
 
             # Выводим статистику
-            print(f"\n{self.colors.success}Статистика датасета (личный чат):{self.colors.reset}")
+            print(
+                f"\n{self.colors.success}Статистика датасета (личный чат):{self.colors.reset}"
+            )
             print(f"  Примеры для обучения: {dataset_stats.train_examples}")
             print(f"  Примеры для валидации: {dataset_stats.valid_examples}")
             print(f"  Средняя длина ответа: {dataset_stats.avg_reply_length:.1f} слов")
 
             total_sources = len(self.manager.get_sources(args.name))
             if total_sources > 1:
-                print(f"\n{self.colors.system}У {args.name} теперь {total_sources} источников данных.{self.colors.reset}")
-                print(f"  При обучении (train) все источники будут объединены автоматически.")
+                print(
+                    f"\n{self.colors.system}У {args.name} теперь {total_sources} источников данных.{self.colors.reset}"
+                )
+                print(
+                    f"  При обучении (train) все источники будут объединены автоматически."
+                )
 
-            print(f"\n{self.colors.success}✓ Личный чат импортирован!{self.colors.reset}")
+            print(
+                f"\n{self.colors.success}✓ Личный чат импортирован!{self.colors.reset}"
+            )
 
             return 0
 
@@ -541,17 +606,23 @@ class FriendGPTCLI:
         создает датасеты для всех участников (кроме --exclude).
         Датасеты добавляются к существующим источникам каждого друга.
         """
-        print(f"{self.colors.system}Импорт группового чата из {args.path}...{self.colors.reset}")
+        print(
+            f"{self.colors.system}Импорт группового чата из {args.path}...{self.colors.reset}"
+        )
 
         if not Path(args.path).exists():
-            print(f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}")
+            print(
+                f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}"
+            )
             return 1
 
         try:
             # Парсим файл группового чата с автоматическим определением формата
             parser = TelegramParser()
             messages = parser.parse_auto(args.path)
-            print(f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}")
+            print(
+                f"{self.colors.success}✓ Спарсено {len(messages)} сообщений{self.colors.reset}"
+            )
 
             # Конвертируем Message → ConversationTurn
             turns = parser.messages_to_turns()
@@ -559,30 +630,40 @@ class FriendGPTCLI:
             # Автодетект всех участников
             all_members = sorted(set(turn.name for turn in turns))
             stats = parser.get_statistics()
-            msg_by_member = stats.get('messages_by_participant', {})
+            msg_by_member = stats.get("messages_by_participant", {})
 
-            print(f"\n{self.colors.system}Участники группового чата ({len(all_members)}):{self.colors.reset}")
+            print(
+                f"\n{self.colors.system}Участники группового чата ({len(all_members)}):{self.colors.reset}"
+            )
             for member in all_members:
                 count = msg_by_member.get(member, 0)
                 print(f"  - {member} ({count} сообщений)")
 
             # Определяем список друзей для обучения
-            if hasattr(args, 'friends') and args.friends:
+            if hasattr(args, "friends") and args.friends:
                 friends = args.friends
                 # Проверяем, что все указанные друзья есть в сообщениях
                 missing = set(friends) - set(all_members)
                 if missing:
-                    print(f"{self.colors.error}Не найдены в чате: {', '.join(missing)}{self.colors.reset}")
+                    print(
+                        f"{self.colors.error}Не найдены в чате: {', '.join(missing)}{self.colors.reset}"
+                    )
                     return 1
             else:
                 # Берём всех участников, исключая указанных в --exclude
-                exclude = set(args.exclude) if hasattr(args, 'exclude') and args.exclude else set()
+                exclude = (
+                    set(args.exclude)
+                    if hasattr(args, "exclude") and args.exclude
+                    else set()
+                )
                 friends = [m for m in all_members if m not in exclude]
 
             if not friends:
                 raise ValueError("Не выбраны участники для импорта")
 
-            print(f"\n{self.colors.system}Создание датасетов для: {', '.join(friends)}{self.colors.reset}")
+            print(
+                f"\n{self.colors.system}Создание датасетов для: {', '.join(friends)}{self.colors.reset}"
+            )
 
             # Для каждого друга строим свой датасет (добавляется к имеющимся)
             for friend_name in friends:
@@ -596,18 +677,20 @@ class FriendGPTCLI:
                 # Строим групповой датасет
                 builder = DatasetBuilder()
                 train_examples, valid_examples = builder.build_group_dataset(
-                    turns=turns,
-                    friend_name=friend_name,
-                    group_members=all_members
+                    turns=turns, friend_name=friend_name, group_members=all_members
                 )
 
                 if not train_examples:
-                    raise ValueError(f"Нет обучающих примеров для {friend_name}: ответы должны содержать минимум 3 слова")
+                    raise ValueError(
+                        f"Нет обучающих примеров для {friend_name}: ответы должны содержать минимум 3 слова"
+                    )
 
                 # Сохраняем датасет
                 friend_dir = self.manager.get_friend_dir(friend_name)
                 friend_dir.mkdir(exist_ok=True)
-                builder.save_dataset(train_examples, valid_examples, friend_dir / dataset_subdir)
+                builder.save_dataset(
+                    train_examples, valid_examples, friend_dir / dataset_subdir
+                )
 
                 # Регистрируем источник
                 dataset_stats = builder.get_stats()
@@ -617,19 +700,25 @@ class FriendGPTCLI:
                     source_type="group",
                     source_path=str(args.path),
                     dataset_dir=dataset_subdir,
-                    num_examples=dataset_stats.total_examples
+                    num_examples=dataset_stats.total_examples,
                 )
 
-                print(f"  {self.colors.success}✓ {friend_name}: "
-                      f"{dataset_stats.train_examples} train / "
-                      f"{dataset_stats.valid_examples} valid "
-                      f"(ответ ~{dataset_stats.avg_reply_length:.0f} слов){self.colors.reset}")
+                print(
+                    f"  {self.colors.success}✓ {friend_name}: "
+                    f"{dataset_stats.train_examples} train / "
+                    f"{dataset_stats.valid_examples} valid "
+                    f"(ответ ~{dataset_stats.avg_reply_length:.0f} слов){self.colors.reset}"
+                )
 
                 total_sources = len(self.manager.get_sources(friend_name))
                 if total_sources > 1:
-                    print(f"    Всего источников: {total_sources} (при train будут объединены)")
+                    print(
+                        f"    Всего источников: {total_sources} (при train будут объединены)"
+                    )
 
-            print(f"\n{self.colors.success}✓ Групповой чат импортирован!{self.colors.reset}")
+            print(
+                f"\n{self.colors.success}✓ Групповой чат импортирован!{self.colors.reset}"
+            )
 
             return 0
 
@@ -648,13 +737,17 @@ class FriendGPTCLI:
         friend_name = args.friend_name
 
         if not self.manager.friend_exists(friend_name):
-            print(f"{self.colors.error}Ошибка: друг '{friend_name}' не найден{self.colors.reset}")
+            print(
+                f"{self.colors.error}Ошибка: друг '{friend_name}' не найден{self.colors.reset}"
+            )
             return
 
         base_model = args.model or "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
         epochs = args.epochs or 3
 
-        print(f"{self.colors.system}Обучение модели для {friend_name}...{self.colors.reset}")
+        print(
+            f"{self.colors.system}Обучение модели для {friend_name}...{self.colors.reset}"
+        )
         print(f"  Базовая модель: {base_model}")
         print(f"  Эпохи: {epochs}")
 
@@ -665,19 +758,25 @@ class FriendGPTCLI:
             dataset_dirs = self.manager.get_dataset_dirs(friend_name)
 
             if not dataset_dirs:
-                print(f"{self.colors.error}Ошибка: датасеты не найдены для {friend_name}{self.colors.reset}")
+                print(
+                    f"{self.colors.error}Ошибка: датасеты не найдены для {friend_name}{self.colors.reset}"
+                )
                 return
 
             # Выводим информацию об источниках
             sources = self.manager.get_sources(friend_name)
-            print(f"\n{self.colors.system}Источники данных ({len(sources)}):{self.colors.reset}")
+            print(
+                f"\n{self.colors.system}Источники данных ({len(sources)}):{self.colors.reset}"
+            )
             for src in sources:
                 src_type = "личный" if src["type"] == "personal" else "групповой"
                 print(f"  - {src_type} чат ({src['num_examples']} примеров)")
 
             # Объединяем датасеты если их несколько
             if len(dataset_dirs) > 1:
-                print(f"\n{self.colors.system}Объединение {len(dataset_dirs)} датасетов...{self.colors.reset}")
+                print(
+                    f"\n{self.colors.system}Объединение {len(dataset_dirs)} датасетов...{self.colors.reset}"
+                )
                 merged_dir = friend_dir / "dataset_merged"
                 train_count, valid_count = DatasetBuilder.merge_datasets(
                     dataset_dirs, merged_dir, shuffle=True
@@ -692,14 +791,16 @@ class FriendGPTCLI:
                 friend_name=friend_name,
                 base_model=base_model,
                 models_dir=friend_dir.parent / "models",
-                configs_dir=friend_dir.parent / "configs"
+                configs_dir=friend_dir.parent / "configs",
             )
 
             # Проверяем наличие чекпоинта для resume
             adapter_path = friend_model.get_adapter_path()
             checkpoint_file = adapter_path / "adapters.safetensors"
             if checkpoint_file.exists():
-                print(f"\n{self.colors.system}⟳ Найден чекпоинт — продолжаем тренировку с последнего сохранения{self.colors.reset}")
+                print(
+                    f"\n{self.colors.system}⟳ Найден чекпоинт — продолжаем тренировку с последнего сохранения{self.colors.reset}"
+                )
 
             # Обучаем адаптер
             print(f"\nОбучение LoRA адаптера ({epochs} эпох, batch_size=2)...")
@@ -710,17 +811,21 @@ class FriendGPTCLI:
                 epochs=epochs,
                 batch_size=2,
                 lora_layers=8,
-                learning_rate=1e-5
+                learning_rate=1e-5,
             )
 
             if not success:
-                print(f"{self.colors.error}Ошибка: тренировка не удалась{self.colors.reset}")
+                print(
+                    f"{self.colors.error}Ошибка: тренировка не удалась{self.colors.reset}"
+                )
                 return
 
             # Обновляем статус
             self.manager.update_friend_status(friend_name, "trained")
 
-            print(f"\n{self.colors.success}✓ Модель успешно обучена!{self.colors.reset}")
+            print(
+                f"\n{self.colors.success}✓ Модель успешно обучена!{self.colors.reset}"
+            )
             print(f"  Адаптер сохранен в: {friend_model.get_adapter_path()}")
 
         except Exception as e:
@@ -733,10 +838,14 @@ class FriendGPTCLI:
 
         status = self.manager.get_friend_status(friend_name)
         if status != "trained":
-            print(f"{self.colors.error}Ошибка: модель для {friend_name} ещё не обучена{self.colors.reset}")
+            print(
+                f"{self.colors.error}Ошибка: модель для {friend_name} ещё не обучена{self.colors.reset}"
+            )
             return
 
-        print(f"{self.colors.system}Слияние адаптера для {friend_name}...{self.colors.reset}")
+        print(
+            f"{self.colors.system}Слияние адаптера для {friend_name}...{self.colors.reset}"
+        )
 
         try:
             friend_dir = self.manager.get_friend_dir(friend_name)
@@ -745,14 +854,16 @@ class FriendGPTCLI:
             friend_model = FriendModel(
                 friend_name=friend_name,
                 models_dir=friend_dir.parent / "models",
-                configs_dir=friend_dir.parent / "configs"
+                configs_dir=friend_dir.parent / "configs",
             )
 
             # Сливаем адаптер с базовой моделью
             success = friend_model.fuse()
 
             if not success:
-                print(f"{self.colors.error}Ошибка: слияние не удалось{self.colors.reset}")
+                print(
+                    f"{self.colors.error}Ошибка: слияние не удалось{self.colors.reset}"
+                )
                 return
 
             # Обновляем статус
@@ -771,7 +882,9 @@ class FriendGPTCLI:
 
         status = self.manager.get_friend_status(friend_name)
         if not status or status not in ("trained", "fused"):
-            print(f"{self.colors.error}Ошибка: модель для {friend_name} не готова к чату{self.colors.reset}")
+            print(
+                f"{self.colors.error}Ошибка: модель для {friend_name} не готова к чату{self.colors.reset}"
+            )
             return
 
         try:
@@ -781,14 +894,16 @@ class FriendGPTCLI:
             friend_model = FriendModel(
                 friend_name=friend_name,
                 models_dir=friend_dir.parent / "models",
-                configs_dir=friend_dir.parent / "configs"
+                configs_dir=friend_dir.parent / "configs",
             )
 
             # Получаем путь к модели (объединенной или с адаптером)
             model_path = friend_model.get_model_path()
 
             if not model_path.exists():
-                print(f"{self.colors.error}Ошибка: модель не найдена{self.colors.reset}")
+                print(
+                    f"{self.colors.error}Ошибка: модель не найдена{self.colors.reset}"
+                )
                 return
 
             # Получаем системный промпт
@@ -798,7 +913,7 @@ class FriendGPTCLI:
             inference = FriendEngine(
                 name=friend_name,
                 model_path=str(model_path),
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
             )
 
             # Запускаем чат
@@ -817,7 +932,9 @@ class FriendGPTCLI:
         for friend_name in friends:
             status = self.manager.get_friend_status(friend_name)
             if not status or status not in ("trained", "fused"):
-                print(f"{self.colors.error}Ошибка: модель для {friend_name} не готова к чату{self.colors.reset}")
+                print(
+                    f"{self.colors.error}Ошибка: модель для {friend_name} не готова к чату{self.colors.reset}"
+                )
                 return
 
         try:
@@ -830,14 +947,16 @@ class FriendGPTCLI:
                 friend_model = FriendModel(
                     friend_name=friend_name,
                     models_dir=friend_dir.parent / "models",
-                    configs_dir=friend_dir.parent / "configs"
+                    configs_dir=friend_dir.parent / "configs",
                 )
 
                 # Получаем путь к модели
                 model_path = friend_model.get_model_path()
 
                 if not model_path.exists():
-                    print(f"{self.colors.error}Ошибка: модель не найдена для {friend_name}{self.colors.reset}")
+                    print(
+                        f"{self.colors.error}Ошибка: модель не найдена для {friend_name}{self.colors.reset}"
+                    )
                     return
 
                 # Создаём инжин для друга
@@ -845,7 +964,7 @@ class FriendGPTCLI:
                 inference_engines[friend_name] = FriendEngine(
                     name=friend_name,
                     model_path=str(model_path),
-                    system_prompt=system_prompt
+                    system_prompt=system_prompt,
                 )
 
             # Запускаем групповой чат
@@ -860,7 +979,9 @@ class FriendGPTCLI:
         friends = self.manager.list_friends()
 
         if not friends:
-            print(f"{self.colors.system}Друзья не найдены. Импортируйте чат Telegram.{self.colors.reset}")
+            print(
+                f"{self.colors.system}Друзья не найдены. Импортируйте чат Telegram.{self.colors.reset}"
+            )
             return
 
         print(f"\n{self.colors.system}Список друзей:{self.colors.reset}")
@@ -894,7 +1015,9 @@ class FriendGPTCLI:
                 source_parts.append(f"{group_count} груп.")
             source_str = ", ".join(source_parts) if source_parts else "нет данных"
 
-            print(f"  {symbol} {color}{name:<20}{self.colors.reset} [{status}] ({source_str})")
+            print(
+                f"  {symbol} {color}{name:<20}{self.colors.reset} [{status}] ({source_str})"
+            )
 
         print("-" * 60)
         print(f"Всего друзей: {len(friends)}")
@@ -905,7 +1028,9 @@ class FriendGPTCLI:
         friend_name = args.friend_name
 
         if not self.manager.friend_exists(friend_name):
-            print(f"{self.colors.error}Ошибка: друг '{friend_name}' не найден{self.colors.reset}")
+            print(
+                f"{self.colors.error}Ошибка: друг '{friend_name}' не найден{self.colors.reset}"
+            )
             return
 
         status = self.manager.get_friend_status(friend_name)
@@ -919,15 +1044,19 @@ class FriendGPTCLI:
             print(f"  Статус: {status}")
 
             if dataset_path.exists():
-                with open(dataset_path, 'r', encoding='utf-8') as f:
+                with open(dataset_path, "r", encoding="utf-8") as f:
                     dataset = json.load(f)
 
                 if isinstance(dataset, dict) and "stats" in dataset:
                     stats = dataset["stats"]
                     print(f"  Сообщений: {stats.get('total_examples', 0)}")
-                    print(f"  Средняя длина: {stats.get('avg_message_length', 0):.1f} символов")
+                    print(
+                        f"  Средняя длина: {stats.get('avg_message_length', 0):.1f} символов"
+                    )
                     print(f"  Уникальные слова: {stats.get('unique_words', 0)}")
-                    print(f"  Период: {stats.get('first_message_date', 'N/A')} — {stats.get('last_message_date', 'N/A')}")
+                    print(
+                        f"  Период: {stats.get('first_message_date', 'N/A')} — {stats.get('last_message_date', 'N/A')}"
+                    )
 
             print("-" * 50)
             print()
@@ -963,36 +1092,63 @@ class FriendGPTCLI:
   python cli.py group Иван Мария
   python cli.py list
   python cli.py profile Иван
-            """
+            """,
         )
 
-        parser.add_argument("--data-dir", default="./friends_data",
-                            help="Каталог данных (по умолчанию: ./friends_data)")
+        parser.add_argument(
+            "--data-dir",
+            default="./friends_data",
+            help="Каталог данных (по умолчанию: ./friends_data)",
+        )
 
         subparsers = parser.add_subparsers(dest="command", help="Команды")
 
         # Команда import
-        import_parser = subparsers.add_parser("import", help="Импортировать чат Telegram")
-        import_parser.add_argument("path", help="Путь к result.json или result.html из экспорта Telegram")
+        import_parser = subparsers.add_parser(
+            "import", help="Импортировать чат Telegram"
+        )
+        import_parser.add_argument(
+            "path", help="Путь к result.json или result.html из экспорта Telegram"
+        )
         import_parser.add_argument("--name", required=True, help="Имя друга")
         import_parser.set_defaults(func=self.cmd_import)
 
         # Команда import-group
-        import_group_parser = subparsers.add_parser("import-group", help="Импортировать групповой чат Telegram")
-        import_group_parser.add_argument("path", help="Путь к экспорту группового чата (JSON/HTML/папка)")
-        import_group_parser.add_argument("--friends", nargs="+", help="Имена друзей для обучения (по умолчанию — все участники)")
-        import_group_parser.add_argument("--exclude", nargs="+", help="Участники, которых НЕ нужно обучать (напр. боты, вы сами)")
+        import_group_parser = subparsers.add_parser(
+            "import-group", help="Импортировать групповой чат Telegram"
+        )
+        import_group_parser.add_argument(
+            "path", help="Путь к экспорту группового чата (JSON/HTML/папка)"
+        )
+        import_group_parser.add_argument(
+            "--friends",
+            nargs="+",
+            help="Имена друзей для обучения (по умолчанию — все участники)",
+        )
+        import_group_parser.add_argument(
+            "--exclude",
+            nargs="+",
+            help="Участники, которых НЕ нужно обучать (напр. боты, вы сами)",
+        )
         import_group_parser.set_defaults(func=self.cmd_import_group)
 
         # Команда train
         train_parser = subparsers.add_parser("train", help="Обучить модель друга")
         train_parser.add_argument("friend_name", help="Имя друга")
-        train_parser.add_argument("--model", default="mlx-community/Meta-Llama-3.1-8B-Instruct-4bit", help="Базовая модель (default: Meta-Llama-3.1-8B)")
-        train_parser.add_argument("--epochs", type=int, default=3, help="Количество эпох обучения")
+        train_parser.add_argument(
+            "--model",
+            default="mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
+            help="Базовая модель (default: Meta-Llama-3.1-8B)",
+        )
+        train_parser.add_argument(
+            "--epochs", type=int, default=3, help="Количество эпох обучения"
+        )
         train_parser.set_defaults(func=self.cmd_train)
 
         # Команда fuse
-        fuse_parser = subparsers.add_parser("fuse", help="Слить адаптер с базовой моделью")
+        fuse_parser = subparsers.add_parser(
+            "fuse", help="Слить адаптер с базовой моделью"
+        )
         fuse_parser.add_argument("friend_name", help="Имя друга")
         fuse_parser.set_defaults(func=self.cmd_fuse)
 
@@ -1025,7 +1181,7 @@ class FriendGPTCLI:
         self.manager = FriendManager(args.data_dir)
 
         # Выполняем команду
-        if hasattr(args, 'func'):
+        if hasattr(args, "func"):
             return args.func(args) or 0
         return 0
 
