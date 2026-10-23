@@ -95,7 +95,7 @@ class FriendManager:
 
     def __init__(self, data_dir: str = "./friends_data"):
         self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_file = self.data_dir / "metadata.json"
         self.colors = ColorScheme.create_default()
         self._load_metadata()
@@ -115,6 +115,10 @@ class FriendManager:
 
     def get_friend_dir(self, friend_name: str) -> Path:
         """Получает директорию друга."""
+        if (not friend_name or friend_name in {".", ".."}
+                or friend_name != friend_name.rstrip(" .")
+                or any(char in friend_name for char in '/\\:')):
+            raise ValueError("Имя друга должно быть одним именем каталога без /, \\ и : и без точки/пробела в конце")
         return self.data_dir / friend_name
 
     def friend_exists(self, friend_name: str) -> bool:
@@ -447,15 +451,15 @@ class FriendGPTCLI:
 
     def __init__(self):
         self.colors = ColorScheme.create_default()
-        self.manager = FriendManager()
+        self.manager = None
 
-    def cmd_import(self, args: argparse.Namespace) -> None:
+    def cmd_import(self, args: argparse.Namespace) -> int:
         """Команда: импортировать личный чат Telegram (автоопределение формата)."""
         print(f"{self.colors.system}Импорт личного чата из {args.path}...{self.colors.reset}")
 
         if not Path(args.path).exists():
             print(f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}")
-            return
+            return 1
 
         try:
             # Парсим файл Telegram с автоматическим определением формата
@@ -474,7 +478,7 @@ class FriendGPTCLI:
             if args.name not in msg_by:
                 print(f"\n{self.colors.error}Имя «{args.name}» не найдено в чате!{self.colors.reset}")
                 print(f"  Используйте одно из имён выше с флагом --name")
-                return
+                return 1
 
             # Конвертируем Message → ConversationTurn
             turns = parser.messages_to_turns()
@@ -490,6 +494,9 @@ class FriendGPTCLI:
                 turns=turns,
                 friend_name=args.name
             )
+
+            if not train_examples:
+                raise ValueError("Нет обучающих примеров: проверьте участника и длину ответов (минимум 3 слова)")
 
             # Сохраняем датасет в поддиректорию
             friend_dir = self.manager.get_friend_dir(args.name)
@@ -520,10 +527,13 @@ class FriendGPTCLI:
 
             print(f"\n{self.colors.success}✓ Личный чат импортирован!{self.colors.reset}")
 
+            return 0
+
         except Exception as e:
             print(f"{self.colors.error}Ошибка: {e}{self.colors.reset}")
+            return 1
 
-    def cmd_import_group(self, args: argparse.Namespace) -> None:
+    def cmd_import_group(self, args: argparse.Namespace) -> int:
         """
         Команда: импортировать групповой чат Telegram.
 
@@ -535,7 +545,7 @@ class FriendGPTCLI:
 
         if not Path(args.path).exists():
             print(f"{self.colors.error}Ошибка: файл/папка не найдены{self.colors.reset}")
-            return
+            return 1
 
         try:
             # Парсим файл группового чата с автоматическим определением формата
@@ -563,11 +573,14 @@ class FriendGPTCLI:
                 missing = set(friends) - set(all_members)
                 if missing:
                     print(f"{self.colors.error}Не найдены в чате: {', '.join(missing)}{self.colors.reset}")
-                    return
+                    return 1
             else:
                 # Берём всех участников, исключая указанных в --exclude
                 exclude = set(args.exclude) if hasattr(args, 'exclude') and args.exclude else set()
                 friends = [m for m in all_members if m not in exclude]
+
+            if not friends:
+                raise ValueError("Не выбраны участники для импорта")
 
             print(f"\n{self.colors.system}Создание датасетов для: {', '.join(friends)}{self.colors.reset}")
 
@@ -587,6 +600,9 @@ class FriendGPTCLI:
                     friend_name=friend_name,
                     group_members=all_members
                 )
+
+                if not train_examples:
+                    raise ValueError(f"Нет обучающих примеров для {friend_name}: ответы должны содержать минимум 3 слова")
 
                 # Сохраняем датасет
                 friend_dir = self.manager.get_friend_dir(friend_name)
@@ -615,8 +631,11 @@ class FriendGPTCLI:
 
             print(f"\n{self.colors.success}✓ Групповой чат импортирован!{self.colors.reset}")
 
+            return 0
+
         except Exception as e:
             print(f"{self.colors.error}Ошибка: {e}{self.colors.reset}")
+            return 1
 
     def cmd_train(self, args: argparse.Namespace) -> None:
         """
@@ -916,7 +935,7 @@ class FriendGPTCLI:
         except Exception as e:
             print(f"{self.colors.error}Ошибка: {e}{self.colors.reset}")
 
-    def main(self) -> None:
+    def main(self) -> int:
         """Основная функция CLI."""
         parser = argparse.ArgumentParser(
             description="FriendGPT - чат с обученными моделями друзей",
@@ -946,6 +965,9 @@ class FriendGPTCLI:
   python cli.py profile Иван
             """
         )
+
+        parser.add_argument("--data-dir", default="./friends_data",
+                            help="Каталог данных (по умолчанию: ./friends_data)")
 
         subparsers = parser.add_subparsers(dest="command", help="Команды")
 
@@ -998,18 +1020,21 @@ class FriendGPTCLI:
 
         if not args.command:
             parser.print_help()
-            return
+            return 0
+
+        self.manager = FriendManager(args.data_dir)
 
         # Выполняем команду
         if hasattr(args, 'func'):
-            args.func(args)
+            return args.func(args) or 0
+        return 0
 
 
-def main() -> None:
+def main() -> int:
     """Точка входа в приложение."""
     cli = FriendGPTCLI()
-    cli.main()
+    return cli.main()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
