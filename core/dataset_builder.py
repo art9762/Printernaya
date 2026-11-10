@@ -5,20 +5,23 @@
 Применяет фильтрацию, разделение на train/val и аугментацию данных.
 """
 
+import json
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional
-import json
 from pathlib import Path
-from collections import defaultdict
+from typing import Optional
 
-from .telegram_parser import TelegramParser, ConversationTurn, PersonalityProfile
+from .telegram_parser import ConversationTurn, PersonalityProfile, TelegramParser
 
 
 @dataclass
 class TrainingExample:
     """Пример для обучения в формате ChatML."""
-    messages: list[dict]  # [{"role": "system"|"user"|"assistant", "content": "..."}, ...]
+
+    messages: list[
+        dict
+    ]  # [{"role": "system"|"user"|"assistant", "content": "..."}, ...]
 
     def to_dict(self) -> dict:
         """Преобразовать в словарь для JSONL."""
@@ -28,6 +31,7 @@ class TrainingExample:
 @dataclass
 class DatasetStats:
     """Статистика построенного датасета."""
+
     total_examples: int = 0
     train_examples: int = 0
     valid_examples: int = 0
@@ -182,7 +186,9 @@ class DatasetBuilder:
         return train_examples, valid_examples
 
     @staticmethod
-    def _extract_profile_from_turns(turns: list[ConversationTurn], friend_name: str) -> dict:
+    def _extract_profile_from_turns(
+        turns: list[ConversationTurn], friend_name: str
+    ) -> dict:
         """
         Извлечь минимальный профиль личности из списка ConversationTurn.
 
@@ -227,7 +233,9 @@ class DatasetBuilder:
             "communication_style": style,
         }
 
-    def _segment_by_time_gaps(self, turns: list[ConversationTurn]) -> list[list[ConversationTurn]]:
+    def _segment_by_time_gaps(
+        self, turns: list[ConversationTurn]
+    ) -> list[list[ConversationTurn]]:
         """
         Сегментировать диалог на отдельные беседы на основе временных разрывов.
 
@@ -285,8 +293,7 @@ class DatasetBuilder:
 
         # Получить список индексов сообщений друга
         friend_message_indices = [
-            i for i, turn in enumerate(conversation)
-            if turn.name == friend_name
+            i for i, turn in enumerate(conversation) if turn.name == friend_name
         ]
 
         # Для каждого сообщения друга создать пример
@@ -350,8 +357,7 @@ class DatasetBuilder:
 
         # Получить список индексов сообщений друга
         friend_message_indices = [
-            i for i, turn in enumerate(conversation)
-            if turn.name == friend_name
+            i for i, turn in enumerate(conversation) if turn.name == friend_name
         ]
 
         # Для каждого сообщения друга создать пример
@@ -707,15 +713,15 @@ class DatasetBuilder:
 
         else:  # variant_idx >= 1
             # Вариант 2: Более подробный промпт с контекстом группы
-            prompt_parts = [
-                f"{friend_name} - это участник группового чата в Telegram."
-            ]
+            prompt_parts = [f"{friend_name} - это участник группового чата в Telegram."]
             if traits and interests:
                 prompt_parts.append(
                     f"Интересуется {', '.join(interests[:3])} и известен "
                     f"{traits[0] if traits else 'уникальной'} личностью."
                 )
-            prompt_parts.append("Отвечай естественно в контексте группового обсуждения.")
+            prompt_parts.append(
+                "Отвечай естественно в контексте группового обсуждения."
+            )
             return " ".join(prompt_parts)
 
     def _split_train_val(
@@ -765,9 +771,7 @@ class DatasetBuilder:
                 reply_msg = example.messages[-1]["content"]
 
                 # Длина контекста в словах (примерная метрика)
-                context_words = sum(
-                    len(m["content"].split()) for m in context_msgs
-                )
+                context_words = sum(len(m["content"].split()) for m in context_msgs)
                 context_lengths.append(context_words)
 
                 # Длина ответа
@@ -775,19 +779,18 @@ class DatasetBuilder:
                 reply_lengths.append(reply_words)
 
             self.stats.avg_context_length = (
-                sum(context_lengths) / len(context_lengths)
-                if context_lengths else 0.0
+                sum(context_lengths) / len(context_lengths) if context_lengths else 0.0
             )
             self.stats.avg_reply_length = (
-                sum(reply_lengths) / len(reply_lengths)
-                if reply_lengths else 0.0
+                sum(reply_lengths) / len(reply_lengths) if reply_lengths else 0.0
             )
             self.stats.min_reply_length = min(reply_lengths) if reply_lengths else 0
             self.stats.max_reply_length = max(reply_lengths) if reply_lengths else 0
             self.stats.avg_exchange_length = (
                 (len(all_examples) + sum(len(ex.messages) for ex in all_examples))
                 / len(all_examples)
-                if all_examples else 0.0
+                if all_examples
+                else 0.0
             )
 
     def save_dataset(
@@ -890,7 +893,9 @@ class DatasetBuilder:
                 f.write(line + "\n")
 
         print(f"✓ Объединенный датасет сохранен в {output_dir}")
-        print(f"  - train.jsonl ({len(all_train)} примеров из {len(dataset_dirs)} источников)")
+        print(
+            f"  - train.jsonl ({len(all_train)} примеров из {len(dataset_dirs)} источников)"
+        )
         print(f"  - valid.jsonl ({len(all_valid)} примеров)")
 
         return len(all_train), len(all_valid)

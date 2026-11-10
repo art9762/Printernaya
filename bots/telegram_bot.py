@@ -11,28 +11,26 @@
 
 import asyncio
 import logging
-import yaml
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
-from datetime import datetime
 
-from telegram import Update, ChatAction
+import yaml
+from telegram import ChatAction, Update
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
-    filters,
     ContextTypes,
     ConversationHandler,
+    MessageHandler,
+    filters,
 )
 
 from core.inference import FriendEngine, GroupChat
 
-
 # Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -94,7 +92,9 @@ class FriendBot:
             await self.app.shutdown()
             logger.info(f"FriendBot '{self.friend_name}' остановлен")
 
-    async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_start(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """
         Обработчик команды /start.
         Отправляет приветствие в стиле друга.
@@ -111,9 +111,13 @@ class FriendBot:
         greeting = self.engine.chat(greeting_prompt)
 
         await update.message.reply_text(greeting)
-        logger.info(f"[{self.friend_name}] Приветствие отправлено пользователю {user_name}")
+        logger.info(
+            f"[{self.friend_name}] Приветствие отправлено пользователю {user_name}"
+        )
 
-    async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """
         Обработчик текстовых сообщений.
         Генерирует ответ используя FriendEngine.
@@ -128,12 +132,14 @@ class FriendBot:
 
         try:
             # Добавляем сообщение в историю
-            self._conversations[chat_id].append({
-                "role": "user",
-                "name": user_name,
-                "content": user_message,
-                "timestamp": datetime.now()
-            })
+            self._conversations[chat_id].append(
+                {
+                    "role": "user",
+                    "name": user_name,
+                    "content": user_message,
+                    "timestamp": datetime.now(),
+                }
+            )
 
             # Отправляем действие "печать" для имитации задержки
             await update.message.chat.send_action(ChatAction.TYPING)
@@ -146,12 +152,14 @@ class FriendBot:
             await asyncio.sleep(typing_delay)
 
             # Добавляем ответ в историю
-            self._conversations[chat_id].append({
-                "role": "assistant",
-                "name": self.friend_name,
-                "content": response,
-                "timestamp": datetime.now()
-            })
+            self._conversations[chat_id].append(
+                {
+                    "role": "assistant",
+                    "name": self.friend_name,
+                    "content": response,
+                    "timestamp": datetime.now(),
+                }
+            )
 
             # Отправляем ответ
             await update.message.reply_text(response)
@@ -166,7 +174,9 @@ class FriendBot:
                 f"Извини, что-то пошло не так. Попробуй ещё раз."
             )
 
-    async def _handle_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_reset(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """
         Обработчик команды /reset.
         Очищает историю разговора.
@@ -177,9 +187,13 @@ class FriendBot:
         await update.message.reply_text(
             f"История разговора очищена! Давайте начнём с чистого листа. 😊"
         )
-        logger.info(f"[{self.friend_name}] История разговора очищена для чата {chat_id}")
+        logger.info(
+            f"[{self.friend_name}] История разговора очищена для чата {chat_id}"
+        )
 
-    async def _handle_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_profile(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """
         Обработчик команды /profile.
         Показывает профиль и характер друга.
@@ -200,11 +214,11 @@ class FriendBot:
 
         except Exception as e:
             logger.error(f"[{self.friend_name}] Ошибка при получении профиля: {e}")
-            await update.message.reply_text(
-                f"Не смогу показать профиль прямо сейчас."
-            )
+            await update.message.reply_text(f"Не смогу показать профиль прямо сейчас.")
 
-    async def _handle_style(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_style(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """
         Обработчик команды /style.
         Показывает примеры типичных фраз друга из истории разговора.
@@ -222,22 +236,28 @@ class FriendBot:
             if assistant_messages:
                 # Показываем последние 3 ответа
                 for i, example in enumerate(assistant_messages[-3:], 1):
-                    style_text += f"{i}. \"{example}\"\n\n"
+                    style_text += f'{i}. "{example}"\n\n'
             else:
-                style_text += f"История разговора пуста. Напиши мне, чтобы увидеть примеры!"
+                style_text += (
+                    f"История разговора пуста. Напиши мне, чтобы увидеть примеры!"
+                )
 
             await update.message.reply_text(style_text, parse_mode="HTML")
             logger.info(f"[{self.friend_name}] Примеры стиля отправлены")
 
         except Exception as e:
-            logger.error(f"[{self.friend_name}] Ошибка при получении примеров стиля: {e}")
-            await update.message.reply_text(
-                f"Не смогу показать примеры прямо сейчас."
+            logger.error(
+                f"[{self.friend_name}] Ошибка при получении примеров стиля: {e}"
             )
+            await update.message.reply_text(f"Не смогу показать примеры прямо сейчас.")
 
-    async def _handle_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_error(
+        self, update: object, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Обработчик ошибок."""
-        logger.error(f"[{self.friend_name}] Обновление {update} вызвало ошибку {context.error}")
+        logger.error(
+            f"[{self.friend_name}] Обновление {update} вызвало ошибку {context.error}"
+        )
 
 
 class GroupBot:
@@ -304,7 +324,9 @@ class GroupBot:
             await self.app.shutdown()
             logger.info("GroupBot остановлен")
 
-    async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_start(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Обработчик команды /start для группового чата."""
         chat_id = update.effective_chat.id
 
@@ -320,7 +342,9 @@ class GroupBot:
         await update.message.reply_text(greeting)
         logger.info(f"GroupBot: Приветствие отправлено")
 
-    async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """
         Обработчик сообщений для группового чата.
         Все друзья отвечают последовательно.
@@ -334,24 +358,30 @@ class GroupBot:
 
         try:
             # Добавляем сообщение в историю
-            self._conversations[chat_id].append({
-                "role": "user",
-                "name": user_name,
-                "content": user_message,
-                "timestamp": datetime.now()
-            })
+            self._conversations[chat_id].append(
+                {
+                    "role": "user",
+                    "name": user_name,
+                    "content": user_message,
+                    "timestamp": datetime.now(),
+                }
+            )
 
             # Отправляем действие "печать"
             await update.message.chat.send_action(ChatAction.TYPING)
 
             # Генерируем ответы от всех друзей через GroupChat используя send_message()
             # Метод send_message возвращает list[FriendResponse]
-            friend_responses = self.group_chat.send_message(user_message, author=user_name)
+            friend_responses = self.group_chat.send_message(
+                user_message, author=user_name
+            )
 
             # Отправляем ответ каждого друга с его именем и эмодзи
             for friend_response in friend_responses:
                 emoji = self.friend_emojis.get(friend_response.name, "🤖")
-                friend_message = f"{emoji} <b>{friend_response.name}:</b>\n{friend_response.text}"
+                friend_message = (
+                    f"{emoji} <b>{friend_response.name}:</b>\n{friend_response.text}"
+                )
 
                 # Имитируем задержку печати
                 typing_delay = min(len(friend_response.text) / 100, 3.0)
@@ -361,12 +391,14 @@ class GroupBot:
                 await update.message.reply_text(friend_message, parse_mode="HTML")
 
                 # Добавляем ответ в историю
-                self._conversations[chat_id].append({
-                    "role": "assistant",
-                    "name": friend_response.name,
-                    "content": friend_response.text,
-                    "timestamp": datetime.now()
-                })
+                self._conversations[chat_id].append(
+                    {
+                        "role": "assistant",
+                        "name": friend_response.name,
+                        "content": friend_response.text,
+                        "timestamp": datetime.now(),
+                    }
+                )
 
                 logger.info(
                     f"GroupBot [{friend_response.name}]: Ответ отправлен - {friend_response.text[:50]}..."
@@ -381,7 +413,9 @@ class GroupBot:
                 "Извините, что-то пошло не так в групповом чате. Попробуйте ещё раз."
             )
 
-    async def _handle_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_reset(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Обработчик команды /reset для группового чата."""
         chat_id = update.effective_chat.id
         self._conversations[chat_id] = []
@@ -391,7 +425,9 @@ class GroupBot:
         )
         logger.info(f"GroupBot: История разговора очищена для чата {chat_id}")
 
-    async def _handle_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _handle_error(
+        self, update: object, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Обработчик ошибок."""
         logger.error(f"GroupBot: Обновление {update} вызвало ошибку {context.error}")
 
@@ -428,7 +464,7 @@ class BotManager:
             if not self.config_path.exists():
                 raise FileNotFoundError(f"Конфигурация не найдена: {self.config_path}")
 
-            with open(self.config_path, 'r', encoding='utf-8') as f:
+            with open(self.config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
 
             if not config:
@@ -461,7 +497,7 @@ class BotManager:
                 name=friend_name,
                 model_path=model_path,
                 adapter_path=adapter_path,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
             )
 
             # Создаём FriendBot
@@ -556,8 +592,8 @@ async def main():
     Использование:
         python -m friendgpt.bots.telegram_bot [--config configs/bots.yaml]
     """
-    import sys
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(
         description="Запуск Telegram ботов для друзей из friendgpt"
@@ -565,15 +601,15 @@ async def main():
     parser.add_argument(
         "--config",
         default="configs/bots.yaml",
-        help="Путь к файлу конфигурации (по умолчанию: configs/bots.yaml)"
+        help="Путь к файлу конфигурации (по умолчанию: configs/bots.yaml)",
     )
 
     args = parser.parse_args()
 
     try:
-        logger.info("="*60)
+        logger.info("=" * 60)
         logger.info("Запуск FriendGPT Telegram Bot Manager")
-        logger.info("="*60)
+        logger.info("=" * 60)
 
         manager = BotManager(config_path=args.config)
 
